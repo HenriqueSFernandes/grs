@@ -1,7 +1,17 @@
 [project]
-name = "proj"
+name = "network-chaos-tool"
 version = "0.1.0"
-description = "Add your description here"
+description = "Programmable chaos engineering tool for Docker-based network topologies"
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = [
+    "docker>=7.0.0",
+]
+
+[project.scripts]
+chaos = "injector.cli:main"
+chaosctl = "injector.sidecar_runner:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
