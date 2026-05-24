@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 SIDECAR_IMAGE = "chaos-sidecar"
+OBSERVABILITY_DATA_DIR = Path(__file__).resolve().parent.parent / "observability" / "data"
+OBSERVABILITY_LOG_PATH = "/observability/data/chaos-events.jsonl"
 
 
 def _ensure_image():
@@ -44,6 +46,8 @@ def _build_image():
 
 def _run_sidecar(args: argparse.Namespace):
     """Launch the sidecar container with the requested chaos args."""
+    OBSERVABILITY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     cmd = [
         "docker",
         "run",
@@ -52,6 +56,10 @@ def _run_sidecar(args: argparse.Namespace):
         "--pid=host",
         "-v",
         "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        f"{OBSERVABILITY_DATA_DIR}:{Path(OBSERVABILITY_LOG_PATH).parent}",
+        "-e",
+        f"CHAOS_EVENT_LOG_PATH={OBSERVABILITY_LOG_PATH}",
         SIDECAR_IMAGE,
         "--target",
         args.target,

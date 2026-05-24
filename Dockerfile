@@ -5,16 +5,11 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends util-linux iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Install the runtime dependency needed by the injector
+RUN pip install --no-cache-dir docker>=7.0.0
 
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml uv.lock ./
 COPY injector/ ./injector/
 
-# Sync dependencies
-RUN uv sync --frozen
-
-ENTRYPOINT ["uv", "run", "python", "-m", "injector"]
+ENTRYPOINT ["python", "-m", "injector"]

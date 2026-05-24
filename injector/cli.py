@@ -5,6 +5,7 @@ import sys
 
 from injector.docker_client import get_container_pid
 from injector.network_chaos import add_latency, add_loss, clear_rules
+from injector.observability import record_event
 
 
 def main():
@@ -39,6 +40,13 @@ def main():
     try:
         pid = get_container_pid(args.target)
     except ValueError as exc:
+        record_event(
+            target=args.target,
+            action=args.action,
+            value=args.value,
+            status="failure",
+            message=str(exc),
+        )
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -52,7 +60,21 @@ def main():
         elif args.action == "clear":
             clear_rules(pid)
             print(f"Cleared all tc rules from container '{args.target}'.")
-    except RuntimeError as exc:
+
+        record_event(
+            target=args.target,
+            action=args.action,
+            value=args.value,
+            status="success",
+        )
+    except (RuntimeError, ValueError) as exc:
+        record_event(
+            target=args.target,
+            action=args.action,
+            value=args.value,
+            status="failure",
+            message=str(exc),
+        )
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 

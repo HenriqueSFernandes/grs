@@ -1,3 +1,11 @@
+Metadata-Version: 2.4
+Name: network-chaos-tool
+Version: 0.1.0
+Summary: Programmable chaos engineering tool for Docker-based network topologies
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: docker>=7.0.0
+
 # Network Chaos Tool
 
 A programmable chaos engineering tool that targets Docker-based network topologies. It injects network faults, like latency, packet loss, and more, into running containers at runtime using `tc` (traffic control) via a privileged sidecar, without requiring any special capabilities inside the target containers themselves.
