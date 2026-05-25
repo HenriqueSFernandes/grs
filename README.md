@@ -95,7 +95,7 @@ The Grafana dashboard is provisioned automatically as **Chaos Dashboard**. Each 
 
 Use the **Reset data** link in the Grafana dashboard when you want to start fresh after changing a dashboard or rerunning an experiment. It opens a confirmation page that clears the chaos event log and the Prometheus series for this stack.
 
-The probe pings target containers and exposes live latency and loss metrics. By default it watches `victim` from the compose file. To probe more containers at startup, set `PROBE_TARGETS` when you run compose or pass targets on the command line:
+The probe pings target containers and exposes live latency and loss metrics. By default it watches `victim` from the compose file. The Live probe section has a `Probe target` dropdown that can show all targets at once or filter to one or more containers. To change the startup set, set `PROBE_TARGETS` when you run compose or pass targets on the command line:
 
 ```bash
 # start the compose stack with multiple targets

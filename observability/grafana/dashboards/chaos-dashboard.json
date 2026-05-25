@@ -112,13 +112,21 @@
       "type": "table"
     },
     {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24},
+      "id": 13,
+      "panels": [],
+      "title": "Live probe",
+      "type": "row"
+    },
+    {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic-by-name"}, "unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
       "id": 9,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "chaos_probe_rtt_ms", "legendFormat": "{{target}}", "refId": "A"}
+        {"expr": "chaos_probe_rtt_ms{target=~\"$target\"}", "legendFormat": "{{target}}", "refId": "A"}
       ],
       "title": "Live probe latency",
       "type": "timeseries"
@@ -138,36 +146,36 @@
           }
         ]
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 25},
       "id": 10,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "chaos_probe_loss_percent", "legendFormat": "{{target}}", "refId": "A"},
-        {"expr": "chaos_probe_loss_percent_avg", "legendFormat": "{{target}}", "refId": "B"}
+        {"expr": "chaos_probe_loss_percent{target=~\"$target\"}", "legendFormat": "{{target}}", "refId": "A"},
+        {"expr": "chaos_probe_loss_percent_avg{target=~\"$target\"}", "legendFormat": "{{target}}", "refId": "B"}
       ],
       "title": "Live probe loss",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+      "fieldConfig": {"defaults": {"displayName": "${__field.labels.target}", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 33},
       "id": 11,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "targets": [
-        {"expr": "sum by (target) (increase(chaos_probe_failures_total[5m]))", "refId": "A"}
+        {"expr": "sum by (target) (increase(chaos_probe_failures_total{target=~\"$target\"}[5m]))", "refId": "A"}
       ],
       "title": "Probe failures (5m)",
       "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+      "fieldConfig": {"defaults": {"displayName": "${__field.labels.target}", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 33},
       "id": 12,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "sum by (target) (increase(chaos_probe_successes_total[5m]))", "legendFormat": "{{target}}", "refId": "A"}
+        {"expr": "sum by (target) (increase(chaos_probe_successes_total{target=~\"$target\"}[5m]))", "legendFormat": "{{target}}", "refId": "A"}
       ],
       "title": "Probe successes (5m)",
       "type": "timeseries"
@@ -177,7 +185,28 @@
   "schemaVersion": 39,
   "style": "dark",
   "tags": ["chaos", "observability"],
-  "templating": {"list": []},
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "Prometheus"},
+        "definition": "label_values(chaos_probe_rtt_ms, target)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": false,
+        "label": "Probe target",
+        "name": "target",
+        "options": [],
+        "query": "label_values(chaos_probe_rtt_ms, target)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
   "time": {"from": "now-15m", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
