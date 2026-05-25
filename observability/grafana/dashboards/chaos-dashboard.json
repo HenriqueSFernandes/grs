@@ -56,7 +56,7 @@
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ms"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
       "id": 4,
-      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
         {"expr": "chaos_target_fault_value{fault=\"latency\"}", "legendFormat": "{{target}}", "refId": "A"}
       ],
@@ -80,7 +80,7 @@
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
       "id": 6,
-      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
         {"expr": "chaos_target_fault_value{fault=\"loss\"}", "legendFormat": "{{target}}", "refId": "A"}
       ],
@@ -134,13 +134,12 @@
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "fieldConfig": {
-        "defaults": {"color": {"mode": "palette-classic-by-name"}, "unit": "percent"},
+        "defaults": {"color": {"mode": "palette-classic-by-name"}, "decimals": 0, "unit": "percent"},
         "overrides": [
           {
             "matcher": {"id": "byFrameRefID", "options": "B"},
             "properties": [
               {"id": "custom.lineStyle", "value": {"dash": [8, 6], "fill": "dash"}},
-              {"id": "custom.hideFrom", "value": {"legend": true, "tooltip": false, "viz": false}},
               {"id": "custom.lineWidth", "value": 1}
             ]
           }
