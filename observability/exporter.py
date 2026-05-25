@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 
 DEFAULT_LOG_PATH = Path("/observability/data/chaos-events.jsonl")
+DEFAULT_PROMETHEUS_BASE_URL = "http://prometheus:9090"
+PROMETHEUS_RESET_SELECTORS = (
+    '{job="chaos-exporter"}',
+    '{job="chaos-probe"}',
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +60,86 @@ def _load_events(log_path: Path) -> list[Event]:
             if event is not None:
                 events.append(event)
     return events
+
+
+def _truncate_log(log_path: Path) -> None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+
+
+def _call_prometheus_admin_api(base_url: str, path: str, data: dict[str, str] | None = None) -> None:
+        payload = None if data is None else urlencode(data).encode("utf-8")
+        request = Request(
+                f"{base_url.rstrip('/')}{path}",
+                data=payload,
+                method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+                response.read()
+
+
+def _reset_prometheus_data(base_url: str) -> None:
+        for selector in PROMETHEUS_RESET_SELECTORS:
+                _call_prometheus_admin_api(
+                        base_url,
+                        "/api/v1/admin/tsdb/delete_series",
+                        {"match[]": selector},
+                )
+        _call_prometheus_admin_api(base_url, "/api/v1/admin/tsdb/clean_tombstones")
+
+
+def reset_observability_state(log_path: Path, prometheus_base_url: str) -> None:
+        _truncate_log(log_path)
+        _reset_prometheus_data(prometheus_base_url)
+
+
+def _render_reset_page(status: str | None = None, error: str | None = None) -> str:
+        message = ""
+        if status == "success":
+                message = "<p class='success'>Observability data has been cleared.</p>"
+        elif error:
+                message = f"<p class='error'>{html.escape(error)}</p>"
+
+        return f"""<!doctype html>
+<html lang=\"en\">
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>Reset observability data</title>
+        <style>
+            body {{
+                font-family: sans-serif;
+                max-width: 42rem;
+                margin: 3rem auto;
+                padding: 0 1.5rem;
+                line-height: 1.5;
+            }}
+            form {{ margin-top: 1.5rem; }}
+            button {{
+                background: #c62828;
+                border: 0;
+                color: white;
+                border-radius: 0.5rem;
+                padding: 0.85rem 1.2rem;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+            }}
+            .success {{ color: #1b5e20; }}
+            .error {{ color: #b71c1c; }}
+            .note {{ color: #555; }}
+        </style>
+    </head>
+    <body>
+        <h1>Reset observability data</h1>
+        <p class=\"note\">This clears the JSONL event log and deletes the Prometheus series for the chaos exporter and probe so the dashboard starts fresh.</p>
+        {message}
+        <form method=\"post\" action=\"/reset\">
+            <button type=\"submit\">Clear data now</button>
+        </form>
+        <p><a href=\"/metrics\">View metrics</a></p>
+    </body>
+</html>"""
 
 
 def _format_labels(labels: dict[str, object]) -> str:
@@ -183,7 +272,21 @@ def render_metrics(events: Iterable[Event]) -> str:
 def serve_metrics(log_path: Path, host: str, port: int) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
-            if self.path not in {"/", "/metrics"}:
+            parsed_path = urlparse(self.path)
+            if parsed_path.path == "/reset":
+                query = parse_qs(parsed_path.query)
+                payload = _render_reset_page(
+                    status=query.get("status", [None])[0],
+                    error=query.get("error", [None])[0],
+                ).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            if parsed_path.path not in {"/", "/metrics"}:
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -194,6 +297,32 @@ def serve_metrics(log_path: Path, host: str, port: int) -> None:
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+
+        def do_POST(self):  # noqa: N802
+            parsed_path = urlparse(self.path)
+            if parsed_path.path != "/reset":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            content_length = int(self.headers.get("Content-Length", "0"))
+            if content_length:
+                self.rfile.read(content_length)
+
+            try:
+                reset_observability_state(log_path, DEFAULT_PROMETHEUS_BASE_URL)
+            except Exception as exc:  # pragma: no cover - reported via the HTML response
+                payload = _render_reset_page(error=str(exc)).encode("utf-8")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/reset?status=success")
+            self.end_headers()
 
         def log_message(self, format, *args):  # noqa: A003
             return

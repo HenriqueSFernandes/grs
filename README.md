@@ -92,6 +92,8 @@ Then open:
 
 The Grafana dashboard is provisioned automatically as **Chaos Dashboard**. Each `chaosctl` run appends an event to `observability/data/chaos-events.jsonl`, which the exporter turns into live metrics for Prometheus to scrape.
 
+Use the **Reset data** link in the Grafana dashboard when you want to start fresh after changing a dashboard or rerunning an experiment. It opens a confirmation page that clears the chaos event log and the Prometheus series for this stack.
+
 ## Project Structure
 
 ```

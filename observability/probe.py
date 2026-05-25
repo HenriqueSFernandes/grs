@@ -7,10 +7,12 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from statistics import fmean
 
 import docker
 from docker.errors import NotFound
@@ -36,6 +38,8 @@ class ProbeState:
 
 STATE = ProbeState(target="")
 STATE_LOCK = threading.Lock()
+LOSS_HISTORY_SIZE = 20
+LOSS_HISTORY: deque[float] = deque(maxlen=LOSS_HISTORY_SIZE)
 
 
 def _resolve_target_ip(target_name: str) -> str:
@@ -99,12 +103,14 @@ def _probe_once(target_name: str, packet_count: int, timeout_seconds: int) -> No
             STATE.last_error = result.stderr.strip() or "ping command failed"
             STATE.loss_percent = 100.0
             STATE.rtt_ms = None
+            LOSS_HISTORY.append(100.0)
             return
 
         try:
             rtt_ms, loss_percent = _parse_ping_output(result.stdout)
             STATE.rtt_ms = rtt_ms
             STATE.loss_percent = loss_percent
+            LOSS_HISTORY.append(loss_percent)
             STATE.successes_total += 1
             STATE.last_error = None
             if loss_percent > 0:
@@ -114,6 +120,7 @@ def _probe_once(target_name: str, packet_count: int, timeout_seconds: int) -> No
             STATE.last_error = str(exc)
             STATE.loss_percent = 100.0
             STATE.rtt_ms = None
+            LOSS_HISTORY.append(100.0)
 
 
 def _probe_loop(target_name: str, interval_seconds: int, packet_count: int, timeout_seconds: int) -> None:
@@ -147,6 +154,9 @@ def _metric_line(name: str, value: object, labels: dict[str, object] | None = No
 def render_metrics() -> str:
     with STATE_LOCK:
         state = ProbeState(**STATE.__dict__)
+        loss_samples = list(LOSS_HISTORY)
+
+    loss_average = fmean(loss_samples) if loss_samples else 0.0
 
     lines = [
         "# HELP chaos_probe_up Whether the live probe has a current result.",
@@ -168,6 +178,13 @@ def render_metrics() -> str:
         _metric_line(
             "chaos_probe_loss_percent",
             state.loss_percent if state.loss_percent is not None else 100,
+            {"target": state.target, "target_ip": state.target_ip or "unknown"},
+        ),
+        "# HELP chaos_probe_loss_percent_avg Rolling average packet loss from the live probe.",
+        "# TYPE chaos_probe_loss_percent_avg gauge",
+        _metric_line(
+            "chaos_probe_loss_percent_avg",
+            loss_average,
             {"target": state.target, "target_ip": state.target_ip or "unknown"},
         ),
         "# HELP chaos_probe_failures_total Total probe iterations that reported loss or errors.",

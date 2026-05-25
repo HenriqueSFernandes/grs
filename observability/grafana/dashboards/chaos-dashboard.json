@@ -6,7 +6,14 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "Reset data",
+      "type": "link",
+      "url": "http://localhost:8000/reset",
+      "targetBlank": true
+    }
+  ],
   "panels": [
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
@@ -123,7 +130,8 @@
       "id": 10,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "chaos_probe_loss_percent", "legendFormat": "{{target}}", "refId": "A"}
+        {"expr": "chaos_probe_loss_percent", "legendFormat": "{{target}} current", "refId": "A"},
+        {"expr": "chaos_probe_loss_percent_avg", "legendFormat": "{{target}} avg", "refId": "B"}
       ],
       "title": "Live probe loss",
       "type": "timeseries"
@@ -135,7 +143,7 @@
       "id": 11,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "targets": [
-        {"expr": "increase(chaos_probe_failures_total[5m])", "refId": "A"}
+        {"expr": "sum by (target) (increase(chaos_probe_failures_total[5m]))", "refId": "A"}
       ],
       "title": "Probe failures (5m)",
       "type": "stat"
@@ -147,7 +155,7 @@
       "id": 12,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "increase(chaos_probe_successes_total[5m])", "legendFormat": "{{target}}", "refId": "A"}
+        {"expr": "sum by (target) (increase(chaos_probe_successes_total[5m]))", "legendFormat": "{{target}}", "refId": "A"}
       ],
       "title": "Probe successes (5m)",
       "type": "timeseries"

@@ -1,16 +1,2 @@
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:47:35.851812+00:00", "value": 500}
-{"action": "clear", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:48:54.898446+00:00"}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:50:53.592393+00:00", "value": 500}
-{"action": "clear", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:51:37.794134+00:00"}
-{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:52:38.282957+00:00", "value": 20}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T18:56:54.809139+00:00", "value": 500}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T19:31:53.762784+00:00", "value": 0}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T19:40:16.935911+00:00", "value": 500}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T19:50:57.413281+00:00", "value": 500}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:03:57.107401+00:00", "value": 0}
-{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:04:57.781834+00:00", "value": 100}
-{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:05:51.372764+00:00", "value": 1}
-{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:06:45.669286+00:00", "value": 1}
-{"action": "latency", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:06:52.640100+00:00", "value": 10}
-{"action": "loss", "message": "Loss percent must be between 0 and 100.", "status": "failure", "target": "victim", "timestamp": "2026-05-24T20:08:40.748315+00:00", "value": 153}
-{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-24T20:08:45.699986+00:00", "value": 53}
+{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-25T09:57:11.991154+00:00", "value": 0}
+{"action": "loss", "status": "success", "target": "victim", "timestamp": "2026-05-25T10:03:46.092066+00:00", "value": 10}
