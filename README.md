@@ -79,7 +79,7 @@ uv run chaosctl --target victim --action clear --rebuild
 
 ### 5. Start the observability stack
 
-Run Prometheus and Grafana alongside the local exporter:
+Run Prometheus, Grafana, the local exporter, and the live probe together:
 
 ```bash
 docker compose -f observability/docker-compose.yml up -d
@@ -89,10 +89,26 @@ Then open:
 
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
+- Probe metrics: http://localhost:8001/metrics
 
 The Grafana dashboard is provisioned automatically as **Chaos Dashboard**. Each `chaosctl` run appends an event to `observability/data/chaos-events.jsonl`, which the exporter turns into live metrics for Prometheus to scrape.
 
 Use the **Reset data** link in the Grafana dashboard when you want to start fresh after changing a dashboard or rerunning an experiment. It opens a confirmation page that clears the chaos event log and the Prometheus series for this stack.
+
+The probe pings target containers and exposes live latency and loss metrics. By default it watches `victim` from the compose file. To probe more containers at startup, set `PROBE_TARGETS` when you run compose or pass targets on the command line:
+
+```bash
+# start the compose stack with multiple targets
+PROBE_TARGETS=victim,api,db docker compose -f observability/docker-compose.yml up -d
+
+# or pass targets directly to the probe process
+python3 observability/probe.py --targets victim,api,db
+
+# or repeat the flag
+python3 observability/probe.py --target victim --target api --target db
+```
+
+If you want the compose stack to watch a different set of containers, change `PROBE_TARGETS` at startup. The probe service is already started by the `docker compose` command above.
 
 ## Project Structure
 

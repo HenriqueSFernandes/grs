@@ -113,7 +113,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ms"}, "overrides": []},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic-by-name"}, "unit": "ms"}, "overrides": []},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
       "id": 9,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
@@ -125,13 +125,25 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "unit": "percent"}, "overrides": []},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic-by-name"}, "unit": "percent"},
+        "overrides": [
+          {
+            "matcher": {"id": "byFrameRefID", "options": "B"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"dash": [8, 6], "fill": "dash"}},
+              {"id": "custom.hideFrom", "value": {"legend": true, "tooltip": false, "viz": false}},
+              {"id": "custom.lineWidth", "value": 1}
+            ]
+          }
+        ]
+      },
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
       "id": 10,
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "chaos_probe_loss_percent", "legendFormat": "{{target}} current", "refId": "A"},
-        {"expr": "chaos_probe_loss_percent_avg", "legendFormat": "{{target}} avg", "refId": "B"}
+        {"expr": "chaos_probe_loss_percent", "legendFormat": "{{target}}", "refId": "A"},
+        {"expr": "chaos_probe_loss_percent_avg", "legendFormat": "{{target}}", "refId": "B"}
       ],
       "title": "Live probe loss",
       "type": "timeseries"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import threading
@@ -36,10 +37,25 @@ class ProbeState:
     last_error: str | None = None
 
 
-STATE = ProbeState(target="")
+STATE_BY_TARGET: dict[str, ProbeState] = {}
 STATE_LOCK = threading.Lock()
 LOSS_HISTORY_SIZE = 20
-LOSS_HISTORY: deque[float] = deque(maxlen=LOSS_HISTORY_SIZE)
+LOSS_HISTORY_BY_TARGET: dict[str, deque[float]] = {}
+
+
+def _ensure_target_state(target_name: str) -> ProbeState:
+    state = STATE_BY_TARGET.get(target_name)
+    if state is None:
+        state = ProbeState(target=target_name)
+        STATE_BY_TARGET[target_name] = state
+    LOSS_HISTORY_BY_TARGET.setdefault(target_name, deque(maxlen=LOSS_HISTORY_SIZE))
+    return state
+
+
+def _parse_targets_text(targets_text: str) -> list[str]:
+    if not targets_text.strip():
+        return []
+    return [target.strip() for target in targets_text.split(",") if target.strip()]
 
 
 def _resolve_target_ip(target_name: str) -> str:
@@ -94,47 +110,54 @@ def _probe_once(target_name: str, packet_count: int, timeout_seconds: int) -> No
     timestamp = time.time()
 
     with STATE_LOCK:
-        STATE.target = target_name
-        STATE.target_ip = ip_address
-        STATE.last_check_seconds = timestamp
+        state = _ensure_target_state(target_name)
+        loss_history = LOSS_HISTORY_BY_TARGET[target_name]
+        state.target_ip = ip_address
+        state.last_check_seconds = timestamp
 
         if result.returncode != 0 and not result.stdout:
-            STATE.failures_total += 1
-            STATE.last_error = result.stderr.strip() or "ping command failed"
-            STATE.loss_percent = 100.0
-            STATE.rtt_ms = None
-            LOSS_HISTORY.append(100.0)
+            state.failures_total += 1
+            state.last_error = result.stderr.strip() or "ping command failed"
+            state.loss_percent = 100.0
+            state.rtt_ms = None
+            loss_history.append(100.0)
             return
 
         try:
             rtt_ms, loss_percent = _parse_ping_output(result.stdout)
-            STATE.rtt_ms = rtt_ms
-            STATE.loss_percent = loss_percent
-            LOSS_HISTORY.append(loss_percent)
-            STATE.successes_total += 1
-            STATE.last_error = None
+            state.rtt_ms = rtt_ms
+            state.loss_percent = loss_percent
+            loss_history.append(loss_percent)
+            state.successes_total += 1
+            state.last_error = None
             if loss_percent > 0:
-                STATE.failures_total += 1
+                state.failures_total += 1
         except RuntimeError as exc:
-            STATE.failures_total += 1
-            STATE.last_error = str(exc)
-            STATE.loss_percent = 100.0
-            STATE.rtt_ms = None
-            LOSS_HISTORY.append(100.0)
+            state.failures_total += 1
+            state.last_error = str(exc)
+            state.loss_percent = 100.0
+            state.rtt_ms = None
+            loss_history.append(100.0)
 
 
-def _probe_loop(target_name: str, interval_seconds: int, packet_count: int, timeout_seconds: int) -> None:
+def _probe_loop(
+    target_name: str,
+    interval_seconds: int,
+    packet_count: int,
+    timeout_seconds: int,
+) -> None:
     while True:
         try:
             _probe_once(target_name, packet_count, timeout_seconds)
         except Exception as exc:  # pragma: no cover - defensive loop guard
             with STATE_LOCK:
-                STATE.target = target_name
-                STATE.last_check_seconds = time.time()
-                STATE.failures_total += 1
-                STATE.last_error = str(exc)
-                STATE.loss_percent = 100.0
-                STATE.rtt_ms = None
+                state = _ensure_target_state(target_name)
+                state.last_check_seconds = time.time()
+                state.failures_total += 1
+                state.last_error = str(exc)
+                state.loss_percent = 100.0
+                state.rtt_ms = None
+                LOSS_HISTORY_BY_TARGET[target_name].append(100.0)
         time.sleep(interval_seconds)
 
 
@@ -153,75 +176,72 @@ def _metric_line(name: str, value: object, labels: dict[str, object] | None = No
 
 def render_metrics() -> str:
     with STATE_LOCK:
-        state = ProbeState(**STATE.__dict__)
-        loss_samples = list(LOSS_HISTORY)
-
-    loss_average = fmean(loss_samples) if loss_samples else 0.0
+        states = [ProbeState(**state.__dict__) for state in STATE_BY_TARGET.values()]
+        loss_history_by_target = {target: list(samples) for target, samples in LOSS_HISTORY_BY_TARGET.items()}
 
     lines = [
         "# HELP chaos_probe_up Whether the live probe has a current result.",
         "# TYPE chaos_probe_up gauge",
-        _metric_line(
-            "chaos_probe_up",
-            1 if state.rtt_ms is not None else 0,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_rtt_ms Latest average RTT from the live probe.",
-        "# TYPE chaos_probe_rtt_ms gauge",
-        _metric_line(
-            "chaos_probe_rtt_ms",
-            state.rtt_ms if state.rtt_ms is not None else 0,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_loss_percent Latest packet loss from the live probe.",
-        "# TYPE chaos_probe_loss_percent gauge",
-        _metric_line(
-            "chaos_probe_loss_percent",
-            state.loss_percent if state.loss_percent is not None else 100,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_loss_percent_avg Rolling average packet loss from the live probe.",
-        "# TYPE chaos_probe_loss_percent_avg gauge",
-        _metric_line(
-            "chaos_probe_loss_percent_avg",
-            loss_average,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_failures_total Total probe iterations that reported loss or errors.",
-        "# TYPE chaos_probe_failures_total counter",
-        _metric_line(
-            "chaos_probe_failures_total",
-            state.failures_total,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_successes_total Total successful probe iterations.",
-        "# TYPE chaos_probe_successes_total counter",
-        _metric_line(
-            "chaos_probe_successes_total",
-            state.successes_total,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
-        "# HELP chaos_probe_last_check_seconds Unix timestamp of the last completed probe.",
-        "# TYPE chaos_probe_last_check_seconds gauge",
-        _metric_line(
-            "chaos_probe_last_check_seconds",
-            state.last_check_seconds if state.last_check_seconds is not None else 0,
-            {"target": state.target, "target_ip": state.target_ip or "unknown"},
-        ),
     ]
 
-    if state.last_error:
+    lines.extend(
+        [
+            "# HELP chaos_probe_rtt_ms Latest average RTT from the live probe.",
+            "# TYPE chaos_probe_rtt_ms gauge",
+            "# HELP chaos_probe_loss_percent Latest packet loss from the live probe.",
+            "# TYPE chaos_probe_loss_percent gauge",
+            "# HELP chaos_probe_loss_percent_avg Rolling average packet loss from the live probe.",
+            "# TYPE chaos_probe_loss_percent_avg gauge",
+            "# HELP chaos_probe_failures_total Total probe iterations that reported loss or errors.",
+            "# TYPE chaos_probe_failures_total counter",
+            "# HELP chaos_probe_successes_total Total successful probe iterations.",
+            "# TYPE chaos_probe_successes_total counter",
+            "# HELP chaos_probe_last_check_seconds Unix timestamp of the last completed probe.",
+            "# TYPE chaos_probe_last_check_seconds gauge",
+        ]
+    )
+
+    for state in sorted(states, key=lambda item: item.target):
+        loss_samples = loss_history_by_target.get(state.target, [])
+        loss_average = fmean(loss_samples) if loss_samples else 0.0
+        labels = {"target": state.target, "target_ip": state.target_ip or "unknown"}
+
         lines.extend(
             [
-                "# HELP chaos_probe_last_error_info Non-zero value when the last probe failed.",
-                "# TYPE chaos_probe_last_error_info gauge",
+                _metric_line("chaos_probe_up", 1 if state.rtt_ms is not None else 0, labels),
                 _metric_line(
-                    "chaos_probe_last_error_info",
-                    1,
-                    {"target": state.target, "error": state.last_error[:120]},
+                    "chaos_probe_rtt_ms",
+                    state.rtt_ms if state.rtt_ms is not None else 0,
+                    labels,
+                ),
+                _metric_line(
+                    "chaos_probe_loss_percent",
+                    state.loss_percent if state.loss_percent is not None else 100,
+                    labels,
+                ),
+                _metric_line("chaos_probe_loss_percent_avg", loss_average, labels),
+                _metric_line("chaos_probe_failures_total", state.failures_total, labels),
+                _metric_line("chaos_probe_successes_total", state.successes_total, labels),
+                _metric_line(
+                    "chaos_probe_last_check_seconds",
+                    state.last_check_seconds if state.last_check_seconds is not None else 0,
+                    labels,
                 ),
             ]
         )
+
+        if state.last_error:
+            lines.extend(
+                [
+                    "# HELP chaos_probe_last_error_info Non-zero value when the last probe failed.",
+                    "# TYPE chaos_probe_last_error_info gauge",
+                    _metric_line(
+                        "chaos_probe_last_error_info",
+                        1,
+                        {"target": state.target, "error": state.last_error[:120]},
+                    ),
+                ]
+            )
 
     lines.append("")
     return "\n".join(lines)
@@ -252,7 +272,16 @@ def serve_metrics(host: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a continuous ping probe against a Docker container.")
-    parser.add_argument("--target", default="victim")
+    parser.add_argument(
+        "--target",
+        action="append",
+        dest="target_list",
+        help="Name or ID of a target container. Repeat to probe multiple containers.",
+    )
+    parser.add_argument(
+        "--targets",
+        help="Comma-separated list of target containers to probe.",
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--interval", type=int, default=2)
@@ -260,15 +289,32 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=1)
     args = parser.parse_args()
 
-    with STATE_LOCK:
-        STATE.target = args.target
+    targets: list[str] = []
+    if args.targets:
+        targets.extend(target.strip() for target in args.targets.split(",") if target.strip())
+    if args.target_list:
+        targets.extend(args.target_list)
+    if not targets:
+        env_targets = os.environ.get("PROBE_TARGETS", "")
+        if env_targets:
+            targets.extend(target.strip() for target in env_targets.split(",") if target.strip())
+    if not targets:
+        targets = ["victim"]
 
-    thread = threading.Thread(
-        target=_probe_loop,
-        args=(args.target, args.interval, args.count, args.timeout),
-        daemon=True,
-    )
-    thread.start()
+    unique_targets = list(dict.fromkeys(targets))
+
+    with STATE_LOCK:
+        for target_name in unique_targets:
+            _ensure_target_state(target_name)
+
+    for target_name in unique_targets:
+        thread = threading.Thread(
+            target=_probe_loop,
+            args=(target_name, args.interval, args.count, args.timeout),
+            daemon=True,
+        )
+        thread.start()
+
     serve_metrics(args.host, args.port)
 
 

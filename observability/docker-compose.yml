@@ -17,7 +17,9 @@ services:
     pid: host
     cap_add:
       - NET_RAW
-    command: ["--target", "victim", "--port", "8001", "--interval", "2", "--count", "5", "--timeout", "1"]
+    environment:
+      PROBE_TARGETS: ${PROBE_TARGETS:-victim}
+    command: ["--port", "8001", "--interval", "2", "--count", "5", "--timeout", "1"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
