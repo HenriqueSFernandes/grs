@@ -1,2 +1,3 @@
 .direnv
 **/__pycache__/
+network_chaos_tool.egg-info
