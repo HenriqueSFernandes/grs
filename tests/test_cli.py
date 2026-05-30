@@ -126,3 +126,38 @@ class TestDuration:
         mock_get_pid.assert_called_once_with("victim")
         mock_clear.assert_called_once_with(1234)
         mock_sleep.assert_not_called()
+
+
+class TestCompositeFaults:
+    """Multiple faults applied in a single tc invocation."""
+
+    @patch("injector.cli.time.sleep")
+    @patch("injector.cli.clear_rules")
+    @patch("injector.cli.add_composite_fault")
+    @patch("injector.cli.get_container_pid")
+    def test_applies_latency_and_loss_together(
+        self, mock_get_pid, mock_add_composite, mock_clear, mock_sleep
+    ):
+        mock_get_pid.return_value = 1234
+
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "chaos",
+                "--target",
+                "victim",
+                "--latency",
+                "500",
+                "--loss",
+                "20",
+                "--duration",
+                "3000",
+            ],
+        ):
+            cli.main()
+
+        mock_get_pid.assert_called_once_with("victim")
+        mock_add_composite.assert_called_once_with(1234, {"latency": 500, "loss": 20})
+        mock_sleep.assert_called_once_with(3.0)
+        mock_clear.assert_called_once_with(1234)

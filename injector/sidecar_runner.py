@@ -140,6 +140,12 @@ def _run_sidecar(tag: str, args: argparse.Namespace):
     if args.duration is not None:
         cmd.extend(["--duration", str(args.duration)])
 
+    if getattr(args, "latency", None) is not None:
+        cmd.extend(["--latency", str(args.latency)])
+
+    if getattr(args, "loss", None) is not None:
+        cmd.extend(["--loss", str(args.loss)])
+
     subprocess.run(cmd, check=True)
 
 
@@ -156,7 +162,6 @@ def _build_direct_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--action",
         "-a",
-        required=True,
         choices=["latency", "loss", "clear"],
         help="Chaos action to apply.",
     )
@@ -165,6 +170,16 @@ def _build_direct_parser() -> argparse.ArgumentParser:
         "-v",
         type=int,
         help="Value for the action (ms for latency, percent for loss). Not needed for 'clear'.",
+    )
+    parser.add_argument(
+        "--latency",
+        type=int,
+        help="Latency in milliseconds (composite fault mode).",
+    )
+    parser.add_argument(
+        "--loss",
+        type=int,
+        help="Packet loss percentage (composite fault mode).",
     )
     parser.add_argument(
         "--duration",
@@ -211,7 +226,18 @@ def main():
         parser = _build_direct_parser()
         args = parser.parse_args(args_list)
 
-        if args.action in ("latency", "loss") and args.value is None:
+        has_composite = args.latency is not None or args.loss is not None
+        has_legacy = args.action is not None
+
+        if has_legacy and has_composite:
+            parser.error("Cannot mix --action/--value with --latency/--loss.")
+
+        if not has_legacy and not has_composite:
+            parser.error(
+                "Must specify either --action or composite flags (--latency, --loss)."
+            )
+
+        if has_legacy and args.action in ("latency", "loss") and args.value is None:
             parser.error(f"--value is required when action is '{args.action}'.")
 
         try:
