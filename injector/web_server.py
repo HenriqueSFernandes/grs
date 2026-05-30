@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from queue import Empty, Queue
@@ -76,6 +77,8 @@ def _query_tc_metrics(name: str) -> dict:
                 "docker",
                 "run",
                 "--rm",
+                "--name",
+                f"chaos-{name}-status-{uuid.uuid4().hex[:6]}",
                 "--privileged",
                 "--pid=host",
                 "-v",
@@ -202,10 +205,13 @@ async def inject_fault(req: InjectRequest):
         )
 
     tag = _ensure_sidecar_image()
+    container_name = f"chaos-{req.target}-{uuid.uuid4().hex[:6]}"
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container_name,
         "--privileged",
         "--pid=host",
         "-v",
@@ -240,10 +246,13 @@ async def clear_container(name: str):
         raise HTTPException(status_code=404, detail=f"Container '{name}' not found.")
 
     tag = _ensure_sidecar_image()
+    container_name = f"chaos-{name}-clear-{uuid.uuid4().hex[:6]}"
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container_name,
         "--privileged",
         "--pid=host",
         "-v",
@@ -363,7 +372,9 @@ async def scenario_logs():
         loop = asyncio.get_running_loop()
         while True:
             try:
-                line = await loop.run_in_executor(None, lambda: _log_queue.get(timeout=30))
+                line = await loop.run_in_executor(
+                    None, lambda: _log_queue.get(timeout=30)
+                )
                 if line is None:
                     yield "data: [DONE]\n\n"
                     break

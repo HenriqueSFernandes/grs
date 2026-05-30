@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import injector
@@ -119,10 +120,13 @@ def _build_image(tag: str):
 
 def _run_sidecar(tag: str, args: argparse.Namespace):
     """Launch the sidecar container with the requested chaos args."""
+    container_name = f"chaos-{args.target}-{uuid.uuid4().hex[:6]}"
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container_name,
         "--privileged",
         "--pid=host",
         "-v",
