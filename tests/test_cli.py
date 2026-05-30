@@ -127,6 +127,38 @@ class TestDuration:
         mock_clear.assert_called_once_with(1234)
         mock_sleep.assert_not_called()
 
+    @patch("injector.cli.time.sleep")
+    @patch("injector.cli.clear_rules")
+    @patch("injector.cli.add_latency")
+    @patch("injector.cli.get_container_pid")
+    def test_duration_zero_sleeps_then_clears(
+        self, mock_get_pid, mock_add_latency, mock_clear, mock_sleep
+    ):
+        """--duration 0 should still auto-clear immediately."""
+        mock_get_pid.return_value = 1234
+
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "chaos",
+                "--target",
+                "victim",
+                "--action",
+                "latency",
+                "--value",
+                "500",
+                "--duration",
+                "0",
+            ],
+        ):
+            cli.main()
+
+        mock_get_pid.assert_called_once_with("victim")
+        mock_add_latency.assert_called_once_with(1234, 500)
+        mock_sleep.assert_called_once_with(0.0)
+        mock_clear.assert_called_once_with(1234)
+
 
 class TestCompositeFaults:
     """Multiple faults applied in a single tc invocation."""

@@ -97,11 +97,17 @@ def execute(path: str):
         if not ready and not running:
             break
 
+        # Sort ready steps by delay so shorter delays launch first
+        ready.sort(key=lambda s: s.delay)
+        current_delay = 0
+
         # Launch all ready steps
         for step in ready:
-            if step.delay > 0:
-                print(f"  [delay] Waiting {step.delay}ms before '{step.id}'...")
-                time.sleep(step.delay / 1000.0)
+            if step.delay > current_delay:
+                delta = step.delay - current_delay
+                print(f"  [delay] Waiting {delta}ms before launching delayed steps...")
+                time.sleep(delta / 1000.0)
+                current_delay = step.delay
             if step.type == "wait":
                 print(
                     f"  [wait] '{step.id}' ({step.name or 'no name'}) — {step.duration}ms"

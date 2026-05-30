@@ -24,8 +24,36 @@ class Scenario:
     steps: list = field(default_factory=list)
 
 
+def _validate_step(step: Step):
+    """Validate a single step's schema."""
+    if step.type not in ("fault", "wait"):
+        raise ValueError(
+            f"Step '{step.id}' has invalid type '{step.type}'. Must be 'fault' or 'wait'."
+        )
+
+    if step.duration < 0:
+        raise ValueError(f"Step '{step.id}' duration must be non-negative.")
+
+    if step.delay < 0:
+        raise ValueError(f"Step '{step.id}' delay must be non-negative.")
+
+    if step.type == "fault":
+        if not step.target:
+            raise ValueError(f"Fault step '{step.id}' must specify a target.")
+        if not step.faults:
+            raise ValueError(f"Fault step '{step.id}' must specify at least one fault.")
+    elif step.type == "wait":
+        if step.target:
+            raise ValueError(f"Wait step '{step.id}' must not specify a target.")
+        if step.faults:
+            raise ValueError(f"Wait step '{step.id}' must not specify faults.")
+
+
 def _validate(scenario: Scenario):
     """Enforce semantic constraints on a parsed scenario."""
+    if not scenario.steps:
+        raise ValueError("Scenario must contain at least one step.")
+
     ids = {step.id for step in scenario.steps}
     if len(ids) != len(scenario.steps):
         raise ValueError("Scenario contains duplicate step ids.")
@@ -99,12 +127,24 @@ def load(path: str) -> Scenario:
     with open(path, "r") as f:
         data = yaml.safe_load(f)
 
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Scenario file must contain a YAML mapping (key-value document)."
+        )
+
+    steps_data = data.get("steps", [])
+    if not isinstance(steps_data, list):
+        raise ValueError("'steps' must be a list.")
+
     scenario = Scenario(
         name=data.get("name", ""),
         description=data.get("description", ""),
     )
 
-    for raw in data.get("steps", []):
+    for raw in steps_data:
+        if not isinstance(raw, dict):
+            raise ValueError("Each step must be a mapping.")
+
         step = Step(
             id=raw["id"],
             type=raw["type"],
@@ -118,9 +158,12 @@ def load(path: str) -> Scenario:
         after = raw.get("after", [])
         if isinstance(after, str):
             step.after = [after]
+        elif not isinstance(after, list):
+            raise ValueError(f"Step '{step.id}' after must be a string or list.")
         else:
             step.after = after
 
+        _validate_step(step)
         scenario.steps.append(step)
 
     _validate(scenario)

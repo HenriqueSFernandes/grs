@@ -89,9 +89,15 @@ def add_composite_fault(pid: int, faults: dict):
     """
     params = {}
     if "latency" in faults:
-        params["delay"] = int(faults["latency"])
+        latency = int(faults["latency"])
+        if latency < 0:
+            raise ValueError("Latency must be non-negative.")
+        params["delay"] = latency
     if "loss" in faults:
-        params["loss"] = float(faults["loss"])
+        loss = float(faults["loss"])
+        if not 0 <= loss <= 100:
+            raise ValueError("Loss percent must be between 0 and 100.")
+        params["loss"] = loss
 
     action = "change" if _has_netem_qdisc(pid) else "add"
     cmd = _build_netem_command(action, params)

@@ -96,7 +96,9 @@ def main():
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if args.duration and (has_composite or args.action in ("latency", "loss")):
+    if args.duration is not None and (
+        has_composite or args.action in ("latency", "loss")
+    ):
         time.sleep(args.duration / 1000.0)
         try:
             clear_rules(pid)

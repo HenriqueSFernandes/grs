@@ -4,6 +4,7 @@ import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from injector import sidecar_runner
 
@@ -67,6 +68,7 @@ class TestDurationForwarding:
         assert "500" in cmd
         assert "--loss" in cmd
         assert "20" in cmd
+        assert "--action" not in cmd
 
 
 class TestRunSubcommand:
@@ -108,3 +110,23 @@ class TestRunSubcommand:
                 sidecar_runner.main()
 
         mock_execute.assert_called_once_with(f.name)
+
+    @patch("injector.sidecar_runner.scenario_executor.execute")
+    def test_run_exits_gracefully_on_validation_error(self, mock_execute):
+        mock_execute.side_effect = ValueError("Invalid scenario")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("name: test\nsteps: []\n")
+            f.flush()
+            with pytest.raises(SystemExit) as exc_info:
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "chaosctl",
+                        "run",
+                        f.name,
+                    ],
+                ):
+                    sidecar_runner.main()
+
+        assert exc_info.value.code == 1

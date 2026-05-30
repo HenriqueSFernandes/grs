@@ -130,9 +130,10 @@ def _run_sidecar(tag: str, args: argparse.Namespace):
         tag,
         "--target",
         args.target,
-        "--action",
-        args.action,
     ]
+
+    if args.action is not None:
+        cmd.extend(["--action", args.action])
 
     if args.value is not None:
         cmd.extend(["--value", str(args.value)])
@@ -218,10 +219,17 @@ def main():
     if args_list and args_list[0] == "run":
         parser = _build_run_parser()
         args = parser.parse_args(args_list[1:])
-        if args.dry_run:
-            scenario_executor.dry_run(args.file)
-        else:
-            scenario_executor.execute(args.file)
+        try:
+            if args.dry_run:
+                scenario_executor.dry_run(args.file)
+            else:
+                scenario_executor.execute(args.file)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     else:
         parser = _build_direct_parser()
         args = parser.parse_args(args_list)

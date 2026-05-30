@@ -141,6 +141,128 @@ steps:
             with pytest.raises(ValueError, match="clear"):
                 scenario_loader.load(f.name)
 
+    def test_rejects_invalid_step_type(self):
+        yaml = """
+steps:
+  - id: s1
+    type: invalid
+    duration: 1000
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="invalid type"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_fault_without_target(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    duration: 1000
+    faults:
+      - loss: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="target"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_fault_without_faults(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="fault"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_wait_with_target(self):
+        yaml = """
+steps:
+  - id: s1
+    type: wait
+    duration: 1000
+    target: c1
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="target"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_wait_with_faults(self):
+        yaml = """
+steps:
+  - id: s1
+    type: wait
+    duration: 1000
+    faults:
+      - loss: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="fault"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_negative_duration(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: -1
+    faults:
+      - loss: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="duration"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_negative_delay(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    delay: -1
+    faults:
+      - loss: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="delay"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_empty_yaml(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("")
+            f.flush()
+            with pytest.raises(ValueError, match="mapping"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_steps_not_a_list(self):
+        yaml = """
+steps:
+  id: s1
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="list"):
+                scenario_loader.load(f.name)
+
 
 class TestLoadValidScenario:
     """Happy-path parsing of well-formed scenario files."""

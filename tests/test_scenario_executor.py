@@ -299,3 +299,38 @@ steps:
         mock_sleep.assert_any_call(0.5)
         # delay before s3
         mock_sleep.assert_any_call(0.3)
+
+    @patch("injector.scenario_executor.time.sleep")
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_parallel_steps_with_different_delays(self, mock_run_sidecar, mock_sleep):
+        """Steps with different delays in the same frontier should launch
+        independently without blocking each other."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    delay: 0
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 1000
+    delay: 500
+    faults:
+      - latency: 200
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        assert mock_run_sidecar.call_count == 2
+        # s1 launches immediately (delay=0), then sleep 0.5 for s2
+        calls = mock_sleep.call_args_list
+        assert calls[0].args[0] == 0.5
