@@ -49,4 +49,3 @@ packages = ["injector"]
 "Dockerfile" = "Dockerfile"
 "pyproject.toml" = "pyproject.toml"
 "README.md" = "README.md"
-"injector/templates" = "injector/templates"
