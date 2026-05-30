@@ -1,6 +1,7 @@
 """Tests for injector.sidecar_runner (host CLI)."""
 
 import sys
+import tempfile
 from unittest.mock import MagicMock, patch
 
 
@@ -65,3 +66,26 @@ class TestDurationForwarding:
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
         assert "--duration" not in cmd
+
+
+class TestRunSubcommand:
+    """chaosctl run <scenario.yaml> subcommand."""
+
+    @patch("injector.sidecar_runner.scenario_executor.dry_run")
+    def test_run_dry_run_invokes_dry_run(self, mock_dry_run):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("name: test\nsteps: []\n")
+            f.flush()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "chaosctl",
+                    "run",
+                    "--dry-run",
+                    f.name,
+                ],
+            ):
+                sidecar_runner.main()
+
+        mock_dry_run.assert_called_once_with(f.name)

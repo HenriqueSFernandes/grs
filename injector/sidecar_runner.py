@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 import injector
-
+from injector import scenario_executor
 
 SIDECAR_IMAGE = "rickysf/chaos-sidecar"
 SIDECAR_VERSION = injector.__version__
@@ -143,7 +143,7 @@ def _run_sidecar(tag: str, args: argparse.Namespace):
     subprocess.run(cmd, check=True)
 
 
-def main():
+def _build_direct_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inject network chaos into a Docker container (host-side wrapper)."
     )
@@ -181,23 +181,51 @@ def main():
         action="store_true",
         help="Force a local build of the sidecar image from bundled source.",
     )
+    return parser
 
-    args = parser.parse_args()
 
-    if args.action in ("latency", "loss") and args.value is None:
-        parser.error(f"--value is required when action is '{args.action}'.")
+def _build_run_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run a chaos scenario from a YAML file."
+    )
+    parser.add_argument("file", help="Path to the scenario YAML file.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and print a timeline without applying chaos.",
+    )
+    return parser
 
-    try:
-        tag = _ensure_image(args)
-        _run_sidecar(tag, args)
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"Error: Command failed with exit code {exc.returncode}.", file=sys.stderr
-        )
-        sys.exit(1)
-    except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+
+def main():
+    args_list = sys.argv[1:]
+
+    if args_list and args_list[0] == "run":
+        parser = _build_run_parser()
+        args = parser.parse_args(args_list[1:])
+        if args.dry_run:
+            scenario_executor.dry_run(args.file)
+        else:
+            print(f"Would execute scenario: {args.file}")
+    else:
+        parser = _build_direct_parser()
+        args = parser.parse_args(args_list)
+
+        if args.action in ("latency", "loss") and args.value is None:
+            parser.error(f"--value is required when action is '{args.action}'.")
+
+        try:
+            tag = _ensure_image(args)
+            _run_sidecar(tag, args)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"Error: Command failed with exit code {exc.returncode}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
