@@ -1,0 +1,60 @@
+name: "Full feature test"
+description: "Tests parallel execution, sequential deps, wait steps, delays, and composite faults across 3 victims."
+
+steps:
+  - id: loss-on-v1
+    name: "50% loss on victim1"
+    type: fault
+    target: victim1
+    duration: 5000
+    faults:
+      - loss: 50
+
+  - id: latency-on-v2
+    name: "500ms latency on victim2"
+    type: fault
+    target: victim2
+    duration: 5000
+    faults:
+      - latency: 500
+
+  - id: settle
+    name: "Wait for network to settle"
+    type: wait
+    duration: 2000
+    after: [loss-on-v1, latency-on-v2]
+
+  - id: composite-on-v3
+    name: "Composite fault on victim3"
+    type: fault
+    target: victim3
+    duration: 5000
+    after: [settle]
+    delay: 1000
+    faults:
+      - latency: 200
+      - loss: 10
+
+  - id: pause
+    name: "Pause before final phase"
+    type: wait
+    duration: 3000
+    after: [composite-on-v3]
+
+  - id: final-latency-v1
+    name: "300ms latency on victim1"
+    type: fault
+    target: victim1
+    duration: 5000
+    after: [pause]
+    faults:
+      - latency: 300
+
+  - id: final-loss-v2
+    name: "20% loss on victim2"
+    type: fault
+    target: victim2
+    duration: 5000
+    after: [pause]
+    faults:
+      - loss: 20
