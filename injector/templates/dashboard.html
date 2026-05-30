@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Network Chaos Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   :root {
     --bg: #0d1117;
@@ -216,6 +217,39 @@
   .btn-sm { padding: 3px 8px; font-size: 11px; }
   .btn-remove { color: var(--red); border-color: rgba(248,81,73,0.2); }
   .btn-remove:hover { background: rgba(248,81,73,0.1); }
+
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  @media (max-width: 768px) { .metrics-grid { grid-template-columns: 1fr; } }
+  .chart-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    position: relative;
+    height: 300px;
+  }
+  .chart-container h3 {
+    font-size: 13px; font-weight: 600; margin-bottom: 8px;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .chart-container canvas { width: 100% !important; height: 240px !important; }
+  .metrics-selector {
+    display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
+  }
+  .metrics-selector label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; }
+  .metrics-selector select { min-width: 200px; }
+  .metrics-selector .ping-badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    background: var(--btn-bg); color: var(--text-muted);
+  }
+  .metrics-selector .ping-badge.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .no-metrics { text-align: center; padding: 48px; color: var(--text-muted); font-size: 14px; }
+  .chart-legend-note { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -272,6 +306,32 @@
         </div>
         <button id="inj-btn" class="btn primary" onclick="injectFault(this)">Inject</button>
       </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Live Metrics</div>
+    <div class="card" id="metrics-panel">
+      <div class="metrics-selector">
+        <label for="metrics-container">Container</label>
+        <select id="metrics-container" onchange="selectMetricsContainer()">
+          <option value="">Select a container...</option>
+        </select>
+        <span class="ping-badge" id="ping-status">pings: --</span>
+      </div>
+      <div class="metrics-grid">
+        <div class="chart-container">
+          <h3>Latency (ms)</h3>
+          <canvas id="chart-latency"></canvas>
+          <div class="chart-legend-note"><span style="color:#8b5cf6">▬</span> tc rule &nbsp; <span style="color:#3fb950;border-bottom:2px dashed #3fb950">---</span> ping RTT</div>
+        </div>
+        <div class="chart-container">
+          <h3>Packet Loss (%)</h3>
+          <canvas id="chart-loss"></canvas>
+          <div class="chart-legend-note"><span style="color:#f85149">▬</span> tc rule &nbsp; <span style="color:#d2991d;border-bottom:2px dashed #d2991d">---</span> ping loss</div>
+        </div>
+      </div>
+      <div class="no-metrics" id="metrics-empty">Select a container to view live metrics.</div>
     </div>
   </div>
 
@@ -886,6 +946,185 @@ function startCountdown() {
 fetchContainers();
 startCountdown();
 setInterval(fetchContainers, POLL_INTERVAL);
+
+let _metricsSource = null;
+let _metricsHistory = [];
+const MAX_METRICS = 60;
+let _latencyChart = null;
+let _lossChart = null;
+let _selectedContainer = '';
+
+function startMetricsStream() {
+  stopMetricsStream();
+  _metricsHistory = [];
+  _metricsSource = new EventSource('/api/metrics/stream');
+  _metricsSource.onmessage = (e) => {
+    try {
+      const snap = JSON.parse(e.data);
+      if (snap.ts && snap.containers) {
+        _metricsHistory.push(snap);
+        if (_metricsHistory.length > MAX_METRICS) _metricsHistory.shift();
+        updateCharts();
+        populateMetricsSelector(snap.containers);
+        updatePingBadge(snap.pings);
+      }
+    } catch (_) {}
+  };
+  _metricsSource.onerror = () => {
+    if (_metricsSource) {
+      _metricsSource.close();
+      _metricsSource = null;
+      setTimeout(startMetricsStream, 5000);
+    }
+  };
+}
+
+function stopMetricsStream() {
+  if (_metricsSource) { _metricsSource.close(); _metricsSource = null; }
+}
+
+function updatePingBadge(pings) {
+  if (!_selectedContainer || !pings) { document.getElementById('ping-status').textContent = 'pings: --'; return; }
+  let totalRtt = 0, count = 0;
+  for (const [key, val] of Object.entries(pings)) {
+    if (key.startsWith(_selectedContainer + '→') && val.rtt_ms !== null) {
+      totalRtt += val.rtt_ms;
+      count++;
+    }
+  }
+  if (count > 0) {
+    const avg = (totalRtt / count).toFixed(1);
+    document.getElementById('ping-status').textContent = `avg ping: ${avg}ms`;
+    document.getElementById('ping-status').classList.add('active');
+  } else {
+    document.getElementById('ping-status').textContent = 'pings: --';
+    document.getElementById('ping-status').classList.remove('active');
+  }
+}
+
+function populateMetricsSelector(containers) {
+  const sel = document.getElementById('metrics-container');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Select a container...</option>';
+  for (const [name, data] of Object.entries(containers || {})) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    const info = data.latency_ms !== null ? `[${data.latency_ms}ms]` : '';
+    opt.textContent = `${name} ${info}`;
+    sel.appendChild(opt);
+  }
+  if (current && [...sel.options].some(o => o.value === current)) {
+    sel.value = current;
+  }
+}
+
+function selectMetricsContainer() {
+  _selectedContainer = document.getElementById('metrics-container').value;
+  if (_selectedContainer) {
+    document.getElementById('metrics-empty').style.display = 'none';
+    renderCharts();
+    updateCharts();
+  } else {
+    document.getElementById('metrics-empty').style.display = 'block';
+    destroyCharts();
+  }
+}
+
+function destroyCharts() {
+  if (_latencyChart) { _latencyChart.destroy(); _latencyChart = null; }
+  if (_lossChart) { _lossChart.destroy(); _lossChart = null; }
+}
+
+function renderCharts() {
+  destroyCharts();
+  const darkOpts = (label, color, dashed) => ({
+    label,
+    borderColor: color,
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    pointRadius: 0,
+    tension: 0.3,
+    borderDash: dashed ? [6, 3] : [],
+    yAxisID: 'y',
+  });
+
+  const latencyCtx = document.getElementById('chart-latency').getContext('2d');
+  _latencyChart = new Chart(latencyCtx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      darkOpts('tc delay', '#8b5cf6', false),
+      darkOpts('ping RTT', '#3fb950', true),
+    ]},
+    options: chartOptions(),
+  });
+
+  const lossCtx = document.getElementById('chart-loss').getContext('2d');
+  _lossChart = new Chart(lossCtx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      darkOpts('tc loss %', '#f85149', false),
+      darkOpts('ping loss %', '#d2991d', true),
+    ]},
+    options: chartOptions(),
+  });
+}
+
+function chartOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 200 },
+    scales: {
+      x: { ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+      y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' } },
+    },
+    plugins: {
+      legend: { labels: { color: '#c9d1d9', font: { size: 11 }, usePointStyle: true, padding: 12 } },
+    },
+    interaction: { intersect: false, mode: 'index' },
+  };
+}
+
+function updateCharts() {
+  if (!_selectedContainer || !_latencyChart || !_lossChart) return;
+
+  const labels = [];
+  const tcDelay = [];
+  const pingRtt = [];
+  const tcLoss = [];
+  const pingLoss = [];
+
+  for (const snap of _metricsHistory) {
+    const d = new Date(snap.ts * 1000);
+    labels.push(d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const c = snap.containers[_selectedContainer] || {};
+    tcDelay.push(c.latency_ms ?? null);
+    tcLoss.push(c.loss_pct ?? null);
+
+    let rttAvg = null, lossAvg = null;
+    let rttCount = 0, lossCount = 0;
+    for (const [key, val] of Object.entries(snap.pings || {})) {
+      if (key.startsWith(_selectedContainer + '→')) {
+        if (val.rtt_ms !== null) { rttAvg = (rttAvg || 0) + val.rtt_ms; rttCount++; }
+        if (val.loss_pct !== null && val.loss_pct !== undefined) { lossAvg = (lossAvg || 0) + val.loss_pct; lossCount++; }
+      }
+    }
+    pingRtt.push(rttCount > 0 ? +(rttAvg / rttCount).toFixed(1) : null);
+    pingLoss.push(lossCount > 0 ? +(lossAvg / lossCount).toFixed(1) : null);
+  }
+
+  _latencyChart.data.labels = labels;
+  _latencyChart.data.datasets[0].data = tcDelay;
+  _latencyChart.data.datasets[1].data = pingRtt;
+  _latencyChart.update('none');
+
+  _lossChart.data.labels = labels;
+  _lossChart.data.datasets[0].data = tcLoss;
+  _lossChart.data.datasets[1].data = pingLoss;
+  _lossChart.update('none');
+}
+
+startMetricsStream();
 </script>
 </body>
 </html>

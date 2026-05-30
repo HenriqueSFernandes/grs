@@ -15,6 +15,16 @@ from injector.network_chaos import (
 )
 
 
+def _run_monitor(args: argparse.Namespace):
+    import uvicorn
+
+    from injector.monitor import app
+
+    port = args.monitor_port
+    print(f"Starting chaos monitor on port {port}...", file=sys.stderr)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Inject network chaos into a Docker container."
@@ -22,13 +32,12 @@ def main():
     parser.add_argument(
         "--target",
         "-t",
-        required=True,
         help="Name or ID of the target container.",
     )
     parser.add_argument(
         "--action",
         "-a",
-        choices=["latency", "loss", "clear", "status"],
+        choices=["latency", "loss", "clear", "status", "monitor"],
         help="Chaos action to apply.",
     )
     parser.add_argument(
@@ -53,8 +62,18 @@ def main():
         type=int,
         help="Duration in milliseconds before auto-clearing the fault.",
     )
+    parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=8080,
+        help="Port for the monitor HTTP server (default: 8080).",
+    )
 
     args = parser.parse_args()
+
+    if args.action == "monitor":
+        _run_monitor(args)
+        sys.exit(0)
 
     has_composite = args.latency is not None or args.loss is not None
     has_legacy = args.action is not None
@@ -66,6 +85,9 @@ def main():
         parser.error(
             "Must specify either --action or composite flags (--latency, --loss)."
         )
+
+    if not args.target:
+        parser.error("--target is required.")
 
     if has_legacy and args.action in ("latency", "loss") and args.value is None:
         parser.error(f"--value is required when action is '{args.action}'.")

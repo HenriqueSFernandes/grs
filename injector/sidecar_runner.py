@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 import injector
-from injector import scenario_executor
+from injector import MONITOR_NAME, scenario_executor
 
 SIDECAR_IMAGE = "rickysf/chaos-sidecar"
 SIDECAR_VERSION = injector.__version__
@@ -154,6 +154,34 @@ def _run_sidecar(tag: str, args: argparse.Namespace):
     subprocess.run(cmd, check=True)
 
 
+def _run_monitor_sidecar(tag: str, args: argparse.Namespace):
+    """Launch a persistent monitor sidecar container."""
+    subprocess.run(
+        ["docker", "rm", "-f", MONITOR_NAME],
+        capture_output=True,
+    )
+    cmd = [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        MONITOR_NAME,
+        "--privileged",
+        "--pid=host",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-p",
+        f"{args.monitor_host_port}:8080",
+        tag,
+        "--action",
+        "monitor",
+        "--monitor-port",
+        "8080",
+    ]
+    subprocess.run(cmd, check=True)
+    print(f"Monitor sidecar '{MONITOR_NAME}' running on port {args.monitor_host_port}.")
+
+
 def _build_direct_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inject network chaos into a Docker container (host-side wrapper)."
@@ -247,6 +275,29 @@ def _serve(args: argparse.Namespace):
     )
 
 
+def _build_monitor_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Launch a persistent chaos monitor sidecar for live metrics."
+    )
+    parser.add_argument(
+        "--monitor-host-port",
+        "-p",
+        type=int,
+        default=9090,
+        help="Host port to expose the monitor on (default: 9090).",
+    )
+    parser.add_argument(
+        "--sidecar-version",
+        help="Override the sidecar image version tag (default: package version).",
+    )
+    parser.add_argument(
+        "--local-build",
+        action="store_true",
+        help="Force a local build of the sidecar image from bundled source.",
+    )
+    return parser
+
+
 def main():
     args_list = sys.argv[1:]
 
@@ -268,6 +319,21 @@ def main():
         parser = _build_serve_parser()
         args = parser.parse_args(args_list[1:])
         _serve(args)
+    elif args_list and args_list[0] == "monitor":
+        parser = _build_monitor_parser()
+        args = parser.parse_args(args_list[1:])
+        try:
+            tag = _ensure_image(args)
+            _run_monitor_sidecar(tag, args)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"Error: Command failed with exit code {exc.returncode}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     else:
         parser = _build_direct_parser()
         args = parser.parse_args(args_list)

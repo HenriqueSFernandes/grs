@@ -5,13 +5,18 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 from pathlib import Path
 from queue import Empty, Queue
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 import docker
 import injector
+from injector import MONITOR_NAME, MONITOR_PORT
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -26,9 +31,14 @@ SIDECAR_IMAGE = "rickysf/chaos-sidecar"
 SIDECAR_VERSION = injector.__version__
 
 _sidecar_tag: str | None = None
+_monitor_url: str | None = None
 
 _log_queue: Queue = Queue()
 _log_history: list[str] = []
+
+_metrics_history: deque = deque(maxlen=60)
+_metrics_history_lock = threading.Lock()
+_metrics_stop = threading.Event()
 
 
 class _LogStream:
@@ -69,52 +79,106 @@ def _ensure_sidecar_image() -> str:
     return tag
 
 
-def _query_tc_metrics(name: str) -> dict:
+def _ensure_monitor() -> str:
+    """Ensure the monitor sidecar is running, returning its base URL."""
+    global _monitor_url
+    if _monitor_url:
+        return _monitor_url
+
     try:
+        c = _docker_client.containers.get(MONITOR_NAME)
+        if c.status != "running":
+            c.start()
+    except docker.errors.NotFound:
         tag = _ensure_sidecar_image()
-        result = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--name",
-                f"chaos-{name}-status-{uuid.uuid4().hex[:6]}",
-                "--privileged",
-                "--pid=host",
-                "-v",
-                "/var/run/docker.sock:/var/run/docker.sock",
-                tag,
-                "--target",
-                name,
-                "--action",
-                "status",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
+        _docker_client.containers.run(
+            image=tag,
+            name=MONITOR_NAME,
+            privileged=True,
+            pid_mode="host",
+            detach=True,
+            remove=True,
+            volumes={
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
+            },
+            ports={"8080/tcp": MONITOR_PORT},
+            command=["--action", "monitor", "--monitor-port", "8080"],
         )
-        if result.returncode != 0:
-            return {"latency_ms": None, "loss_pct": None}
-        data = json.loads(result.stdout.strip())
-        return {
-            "latency_ms": data.get("latency_ms"),
-            "loss_pct": data.get("loss_pct"),
-        }
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+    except docker.errors.APIError:
+        pass
+
+    _monitor_url = f"http://localhost:{MONITOR_PORT}"
+    return _monitor_url
+
+
+def _monitor_get(path: str) -> dict | None:
+    """Make a GET request to the monitor sidecar and return parsed JSON."""
+    try:
+        base = _ensure_monitor()
+        req = Request(f"{base}{path}")
+        req.add_header("Accept", "application/json")
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except (URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _query_tc_metrics(name: str) -> dict:
+    data = _monitor_get(f"/metrics/{name}")
+    if data is None:
         return {"latency_ms": None, "loss_pct": None}
+    return {
+        "latency_ms": data.get("latency_ms"),
+        "loss_pct": data.get("loss_pct"),
+    }
 
 
 def _get_tc_metrics_batch(names: list[str]) -> dict[str, dict]:
-    results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_query_tc_metrics, name): name for name in names}
-        for future in as_completed(futures):
-            name = futures[future]
+    data = _monitor_get("/metrics/all")
+    if data is None:
+        return {name: {"latency_ms": None, "loss_pct": None} for name in names}
+    return {
+        name: {
+            "latency_ms": data[name].get("latency_ms") if name in data else None,
+            "loss_pct": data[name].get("loss_pct") if name in data else None,
+        }
+        for name in names
+    }
+
+
+def _start_metrics_collector():
+    """Background thread that polls the monitor and fills the history buffer."""
+    global _metrics_history
+
+    def _loop():
+        while not _metrics_stop.is_set():
             try:
-                results[name] = future.result()
+                tc_data = _monitor_get("/metrics/all")
+                ping_data = _monitor_get("/ping/all")
+                snapshot = {
+                    "ts": time.time(),
+                    "containers": tc_data or {},
+                    "pings": ping_data or {},
+                }
+                with _metrics_history_lock:
+                    _metrics_history.append(snapshot)
             except Exception:
-                results[name] = {"latency_ms": None, "loss_pct": None}
-    return results
+                pass
+            _metrics_stop.wait(2.0)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+
+@app.on_event("startup")
+async def _on_startup():
+    _ensure_monitor()
+    _start_metrics_collector()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    _metrics_stop.set()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -132,11 +196,15 @@ async def list_containers():
     for c in containers:
         status = c.status
         tc_metrics = tc_batch.get(c.name, {"latency_ms": None, "loss_pct": None})
+        try:
+            image_tag = c.image.tags[0] if c.image.tags else "unknown"
+        except docker.errors.ImageNotFound:
+            image_tag = "unknown"
         result.append(
             {
                 "name": c.name,
                 "id": c.short_id,
-                "image": c.image.tags[0] if c.image.tags else "unknown",
+                "image": image_tag,
                 "status": status,
                 "latency_ms": tc_metrics.get("latency_ms"),
                 "loss_pct": tc_metrics.get("loss_pct"),
@@ -383,3 +451,25 @@ async def scenario_logs():
                 yield "data: [KEEPALIVE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/metrics/stream")
+async def metrics_stream():
+    """SSE endpoint that pushes live metrics snapshots (tc rules + pings)."""
+
+    async def generate():
+        while not _metrics_stop.is_set():
+            with _metrics_history_lock:
+                if _metrics_history:
+                    latest = _metrics_history[-1]
+                    yield f"data: {json.dumps(latest)}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/metrics/history")
+async def metrics_history():
+    """Return the last 60 snapshots of metrics history."""
+    with _metrics_history_lock:
+        return list(_metrics_history)

@@ -4,23 +4,17 @@ import re
 import subprocess
 
 
-def _exec_tc_in_netns(pid: int, command: str):
-    """Execute a tc command inside the target container's network namespace.
-
-    Args:
-        pid: Host PID of the target container's init process.
-        command: The tc sub-command (e.g. "qdisc add dev eth0 root netem delay 500ms").
-
-    Returns:
-        subprocess.CompletedProcess result.
-    """
-    full_cmd = ["nsenter", "-t", str(pid), "-n", "tc"] + command.split()
-    result = subprocess.run(
+def _exec_in_netns(
+    pid: int, argv: list[str], timeout: int = 5
+) -> subprocess.CompletedProcess:
+    """Execute an arbitrary command inside a container's network namespace."""
+    full_cmd = ["nsenter", "-t", str(pid), "-n"] + argv
+    return subprocess.run(
         full_cmd,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
-    return result
 
 
 def _is_no_such_file_error(output: str) -> bool:
@@ -40,7 +34,7 @@ def _get_current_netem_params(pid: int) -> dict:
     Returns:
         A dict like {"delay": 500, "loss": 20} or {} if no netem qdisc exists.
     """
-    result = _exec_tc_in_netns(pid, "qdisc show dev eth0")
+    result = _exec_in_netns(pid, ["tc", "qdisc", "show", "dev", "eth0"])
     if result.returncode != 0:
         return {}
 
@@ -101,7 +95,7 @@ def add_composite_fault(pid: int, faults: dict):
 
     action = "change" if _has_netem_qdisc(pid) else "add"
     cmd = _build_netem_command(action, params)
-    result = _exec_tc_in_netns(pid, cmd)
+    result = _exec_in_netns(pid, ["tc"] + cmd.split())
     if result.returncode != 0:
         raise RuntimeError(f"Failed to add composite fault: {result.stderr.strip()}")
 
@@ -111,7 +105,7 @@ def clear_rules(pid: int):
 
     This is idempotent: if no rules exist, it does not raise.
     """
-    result = _exec_tc_in_netns(pid, "qdisc del dev eth0 root")
+    result = _exec_in_netns(pid, ["tc", "qdisc", "del", "dev", "eth0", "root"])
     if result.returncode != 0 and not _is_no_such_file_error(result.stderr):
         raise RuntimeError(f"Failed to clear tc rules: {result.stderr.strip()}")
 
@@ -133,7 +127,7 @@ def add_latency(pid: int, ms: int):
 
     action = "change" if _has_netem_qdisc(pid) else "add"
     cmd = _build_netem_command(action, current)
-    result = _exec_tc_in_netns(pid, cmd)
+    result = _exec_in_netns(pid, ["tc"] + cmd.split())
     if result.returncode != 0:
         raise RuntimeError(f"Failed to add latency: {result.stderr.strip()}")
 
@@ -155,12 +149,66 @@ def add_loss(pid: int, percent: int):
 
     action = "change" if _has_netem_qdisc(pid) else "add"
     cmd = _build_netem_command(action, current)
-    result = _exec_tc_in_netns(pid, cmd)
+    result = _exec_in_netns(pid, ["tc"] + cmd.split())
     if result.returncode != 0:
         raise RuntimeError(f"Failed to add loss: {result.stderr.strip()}")
 
 
 def _has_netem_qdisc(pid: int) -> bool:
     """Check if a netem qdisc currently exists on eth0."""
-    result = _exec_tc_in_netns(pid, "qdisc show dev eth0")
+    result = _exec_in_netns(pid, ["tc", "qdisc", "show", "dev", "eth0"])
     return result.returncode == 0 and "netem" in result.stdout
+
+
+def ping_from_namespace(
+    pid: int, target_ip: str, count: int = 3, timeout: int = 2
+) -> dict:
+    """Ping a target IP from inside a container's network namespace.
+
+    Args:
+        pid: Host PID of the target container's init process.
+        target_ip: IP address to ping.
+        count: Number of ping packets (default 3).
+        timeout: Per-ping timeout in seconds, also used as subprocess timeout.
+
+    Returns:
+        Dict with keys: rtt_ms (float or None), loss_pct (float), sent (int), received (int).
+        Returns rtt_ms=None if no reply.
+    """
+    try:
+        result = _exec_in_netns(
+            pid,
+            ["ping", "-c", str(count), "-W", str(timeout), target_ip],
+            timeout=timeout + 2,
+        )
+    except subprocess.TimeoutExpired:
+        return {"rtt_ms": None, "loss_pct": 100.0, "sent": count, "received": 0}
+
+    output = result.stdout + result.stderr
+
+    sent = count
+    received = 0
+    rtt_ms = None
+
+    stats_match = re.search(r"(\d+)\s+packets transmitted,\s*(\d+)\s+received", output)
+    if stats_match:
+        sent = int(stats_match.group(1))
+        received = int(stats_match.group(2))
+
+    rtt_match = re.search(
+        r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+", output
+    )
+    if rtt_match:
+        rtt_ms = float(rtt_match.group(1))
+
+    if sent > 0:
+        loss_pct = ((sent - received) / sent) * 100.0
+    else:
+        loss_pct = 100.0
+
+    return {
+        "rtt_ms": rtt_ms,
+        "loss_pct": round(loss_pct, 1),
+        "sent": sent,
+        "received": received,
+    }
