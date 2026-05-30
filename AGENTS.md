@@ -17,7 +17,7 @@ uv pip install -e .
 ```
 
 ## Running / verifying changes
-There are **no automated Python tests**. Verification is manual against a victim container:
+Run unit tests locally with `pytest`; manual verification is still possible against a victim container:
 ```bash
 # Build and run the victim
 docker build -t chaos-victim tests/victim
