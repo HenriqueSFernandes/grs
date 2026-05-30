@@ -93,6 +93,18 @@
   .btn.danger:hover { background: rgba(248,81,73,0.1); }
   .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn.primary:hover { opacity: 0.9; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.loading { pointer-events: none; }
+
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    margin-right: 4px; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .card {
     background: var(--bg-card); border: 1px solid var(--border);
@@ -176,7 +188,7 @@
           <label for="inj-duration">Duration (ms)</label>
           <input type="number" id="inj-duration" placeholder="auto-clear" min="0" style="width:120px">
         </div>
-        <button class="btn primary" onclick="injectFault()">Inject</button>
+        <button id="inj-btn" class="btn primary" onclick="injectFault(this)">Inject</button>
       </div>
     </div>
   </div>
@@ -186,9 +198,9 @@
     <div class="card">
       <textarea id="scenario-yaml" spellcheck="false"></textarea>
       <div class="scenario-actions">
-        <button class="btn" onclick="validateScenario()">Validate (dry-run)</button>
-        <button class="btn primary" onclick="runScenario()">Run</button>
-        <button class="btn" onclick="loadTemplate()">Load Template</button>
+        <button class="btn" onclick="validateScenario(this)">Validate (dry-run)</button>
+        <button class="btn primary" onclick="runScenario(this)">Run</button>
+        <button class="btn" onclick="loadTemplate(this)">Load Template</button>
       </div>
       <div class="output" id="scenario-output"></div>
     </div>
@@ -245,7 +257,7 @@ function renderTable(containers) {
     html += `<td>${formatMetric(c.loss_pct, '%')}</td>`;
     html += '<td><div class="actions">';
     if (c.status === 'running') {
-      html += `<button class="btn danger" onclick="clearContainer('${escapeHtml(c.name)}')" title="Clear faults">Clear</button>`;
+      html += `<button class="btn danger" onclick="clearContainer('${escapeHtml(c.name)}', this)" title="Clear faults">Clear</button>`;
     }
     html += '</div></td></tr>';
   }
@@ -272,7 +284,19 @@ function populateTargets(containers) {
   }
 }
 
-async function injectFault() {
+function spin(btn, fn) {
+  btn.disabled = true;
+  btn.classList.add('loading');
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner"></span>' + orig;
+  return fn().finally(() => {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = orig;
+  });
+}
+
+async function injectFault(btn) {
   const target = document.getElementById('inj-target').value;
   const action = document.getElementById('inj-action').value;
   const value = parseInt(document.getElementById('inj-value').value);
@@ -284,7 +308,7 @@ async function injectFault() {
   const body = { target, action, value };
   if (duration) body.duration = parseInt(duration);
 
-  try {
+  spin(btn, async () => {
     const resp = await fetch('/api/inject', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -295,15 +319,13 @@ async function injectFault() {
       alert(`Error: ${err.detail}`);
       return;
     }
-    fetchContainers();
-  } catch (e) {
-    alert('Failed to inject fault: ' + e);
-  }
+    setTimeout(fetchContainers, 800);
+  });
 }
 
-async function clearContainer(name) {
+async function clearContainer(name, btn) {
   if (!confirm(`Clear all faults on "${name}"?`)) return;
-  try {
+  spin(btn, async () => {
     const resp = await fetch(`/api/clear/${encodeURIComponent(name)}`, { method: 'POST' });
     if (!resp.ok) {
       const err = await resp.json();
@@ -311,18 +333,16 @@ async function clearContainer(name) {
       return;
     }
     fetchContainers();
-  } catch (e) {
-    alert('Failed to clear: ' + e);
-  }
+  });
 }
 
-async function validateScenario() {
+async function validateScenario(btn) {
   const yaml = document.getElementById('scenario-yaml').value;
   if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
   const out = document.getElementById('scenario-output');
   out.className = 'output visible';
   out.textContent = 'Validating...';
-  try {
+  spin(btn, async () => {
     const resp = await fetch('/api/scenario/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -334,22 +354,19 @@ async function validateScenario() {
       out.textContent = data.detail;
     } else {
       out.className = 'output visible';
-      out.textContent = 'Scenario is valid.';
+      out.textContent = data.output || 'Scenario is valid.';
     }
-  } catch (e) {
-    out.className = 'output visible error';
-    out.textContent = 'Error: ' + e;
-  }
+  });
 }
 
-async function runScenario() {
+async function runScenario(btn) {
   const yaml = document.getElementById('scenario-yaml').value;
   if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
   if (!confirm('Run this scenario?')) return;
   const out = document.getElementById('scenario-output');
   out.className = 'output visible';
   out.textContent = 'Running scenario...';
-  try {
+  spin(btn, async () => {
     const resp = await fetch('/api/scenario/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -363,21 +380,16 @@ async function runScenario() {
       out.className = 'output visible';
       out.textContent = 'Scenario launched. Watch the containers for updates.';
     }
-  } catch (e) {
-    out.className = 'output visible error';
-    out.textContent = 'Error: ' + e;
-  }
+  });
 }
 
-async function loadTemplate() {
-  try {
+async function loadTemplate(btn) {
+  spin(btn, async () => {
     const resp = await fetch('/api/scenario/template');
     if (!resp.ok) throw new Error('Template not found');
     const data = await resp.json();
     document.getElementById('scenario-yaml').value = data.yaml;
-  } catch (e) {
-    alert('Failed to load template: ' + e);
-  }
+  });
 }
 
 function escapeHtml(str) {
