@@ -1,16 +1,18 @@
 """FastAPI web server for chaos dashboard and API."""
 
+import asyncio
 import json
 import os
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from queue import Empty, Queue
 
 import docker
 import injector
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Network Chaos Dashboard", version=injector.__version__)
@@ -23,6 +25,29 @@ SIDECAR_IMAGE = "rickysf/chaos-sidecar"
 SIDECAR_VERSION = injector.__version__
 
 _sidecar_tag: str | None = None
+
+_log_queue: Queue = Queue()
+_log_history: list[str] = []
+
+
+class _LogStream:
+    """Wraps write calls and pushes complete lines to the global log queue."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def write(self, s: str) -> None:
+        for ch in s:
+            if ch == "\n":
+                if self._buf:
+                    _log_history.append(self._buf)
+                    _log_queue.put(self._buf)
+                self._buf = ""
+            else:
+                self._buf += ch
+
+    def flush(self) -> None:
+        pass
 
 
 def _ensure_sidecar_image() -> str:
@@ -285,14 +310,33 @@ async def run_scenario(req: ScenarioRequest):
                 pass
             raise
 
+    global _log_queue, _log_history
+    _log_queue = Queue()
+    _log_history = []
+
     import threading
 
     def _execute():
-        try:
-            from injector import scenario_executor
+        import sys as _sys
+        from injector import scenario_executor as _exec
 
-            scenario_executor.execute(tmp_path)
+        stream = _LogStream()
+        old_stdout = _sys.stdout
+        old_stderr = _sys.stderr
+        _sys.stdout = stream
+        _sys.stderr = stream
+        try:
+            try:
+                _exec.execute(tmp_path)
+            except SystemExit:
+                pass
         finally:
+            _sys.stdout = old_stdout
+            _sys.stderr = old_stderr
+            if stream._buf:
+                _log_history.append(stream._buf)
+                _log_queue.put(stream._buf)
+            _log_queue.put(None)
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -308,3 +352,23 @@ async def scenario_template():
     if not template_path.exists():
         raise HTTPException(status_code=404, detail="Template not found.")
     return {"yaml": template_path.read_text()}
+
+
+@app.get("/api/scenario/logs")
+async def scenario_logs():
+    async def generate():
+        for line in _log_history:
+            yield f"data: {line}\n\n"
+
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                line = await loop.run_in_executor(None, lambda: _log_queue.get(timeout=30))
+                if line is None:
+                    yield "data: [DONE]\n\n"
+                    break
+                yield f"data: {line}\n\n"
+            except Empty:
+                yield "data: [KEEPALIVE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
