@@ -1,7 +1,6 @@
 """Host-side wrapper that launches the chaos-sidecar container."""
 
 import argparse
-import importlib.resources
 import shutil
 import subprocess
 import sys
@@ -106,7 +105,11 @@ def _build_image(tag: str):
             if item.is_file():
                 shutil.copy2(item, injector_dst / item.name)
             elif item.is_dir():
-                shutil.copytree(item, injector_dst / item.name, ignore=shutil.ignore_patterns("__pycache__"))
+                shutil.copytree(
+                    item,
+                    injector_dst / item.name,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
 
         subprocess.run(
             ["docker", "build", "-t", tag, str(tmp)],
@@ -117,17 +120,25 @@ def _build_image(tag: str):
 def _run_sidecar(tag: str, args: argparse.Namespace):
     """Launch the sidecar container with the requested chaos args."""
     cmd = [
-        "docker", "run", "--rm",
+        "docker",
+        "run",
+        "--rm",
         "--privileged",
         "--pid=host",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
         tag,
-        "--target", args.target,
-        "--action", args.action,
+        "--target",
+        args.target,
+        "--action",
+        args.action,
     ]
 
     if args.value is not None:
         cmd.extend(["--value", str(args.value)])
+
+    if args.duration is not None:
+        cmd.extend(["--duration", str(args.duration)])
 
     subprocess.run(cmd, check=True)
 
@@ -137,20 +148,29 @@ def main():
         description="Inject network chaos into a Docker container (host-side wrapper)."
     )
     parser.add_argument(
-        "--target", "-t",
+        "--target",
+        "-t",
         required=True,
         help="Name or ID of the target container.",
     )
     parser.add_argument(
-        "--action", "-a",
+        "--action",
+        "-a",
         required=True,
         choices=["latency", "loss", "clear"],
         help="Chaos action to apply.",
     )
     parser.add_argument(
-        "--value", "-v",
+        "--value",
+        "-v",
         type=int,
         help="Value for the action (ms for latency, percent for loss). Not needed for 'clear'.",
+    )
+    parser.add_argument(
+        "--duration",
+        "-d",
+        type=int,
+        help="Duration in milliseconds before the sidecar auto-clears the fault.",
     )
     parser.add_argument(
         "--sidecar-version",

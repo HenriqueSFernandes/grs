@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import time
 
 from injector.docker_client import get_container_pid
 from injector.network_chaos import add_latency, add_loss, clear_rules
@@ -30,6 +31,12 @@ def main():
         type=int,
         help="Value for the action (ms for latency, percent for loss). Not needed for 'clear'.",
     )
+    parser.add_argument(
+        "--duration",
+        "-d",
+        type=int,
+        help="Duration in milliseconds before auto-clearing the fault.",
+    )
 
     args = parser.parse_args()
 
@@ -55,6 +62,17 @@ def main():
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    if args.duration and args.action in ("latency", "loss"):
+        time.sleep(args.duration / 1000.0)
+        try:
+            clear_rules(pid)
+            print(
+                f"Auto-cleared rules from container '{args.target}' after {args.duration}ms."
+            )
+        except RuntimeError as exc:
+            print(f"Error during auto-clear: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
