@@ -134,6 +134,69 @@
   .output.error { color: var(--red); border-color: rgba(248,81,73,0.3); }
   .empty-state { text-align: center; padding: 32px; color: var(--text-muted); font-size: 14px; }
   .container-name { font-family: monospace; font-weight: 600; }
+
+  .tab-bar { display: flex; gap: 0; margin-bottom: -1px; position: relative; z-index: 1; }
+  .tab-btn {
+    padding: 8px 16px; font-size: 13px; font-weight: 500;
+    background: var(--btn-bg); color: var(--text-muted);
+    border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0;
+    cursor: pointer; transition: 0.15s;
+  }
+  .tab-btn.active {
+    background: var(--bg-card); color: var(--text);
+    border-bottom: 1px solid var(--bg-card);
+  }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .step-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+  .step-card {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+  }
+  .step-card-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .step-card-header .step-label {
+    font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+    width: 40px; flex-shrink: 0;
+  }
+  .step-card-header input {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; font-family: monospace;
+  }
+  .step-card-header input.step-id { width: 90px; }
+  .step-card-header input.step-name { flex: 1; }
+  .step-card-header .step-index { color: var(--text-muted); font-size: 12px; font-weight: 600; min-width: 20px; }
+
+  .step-card-body { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .step-field { display: flex; flex-direction: column; gap: 3px; }
+  .step-field label {
+    font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .step-field select, .step-field input {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 8px; font-size: 12px; font-family: inherit;
+  }
+  .step-field input[type="number"] { width: 80px; }
+
+  .step-card-deps {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-muted);
+  }
+  .step-card-deps .dep-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .step-card-deps label.check-label {
+    display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+    font-size: 11px; color: var(--text);
+  }
+  .step-card-deps input[type="checkbox"] { accent-color: var(--accent); }
+
+  .add-step-btn { width: 100%; padding: 10px; }
+  .btn-sm { padding: 3px 8px; font-size: 11px; }
+  .btn-remove { color: var(--red); border-color: rgba(248,81,73,0.2); }
+  .btn-remove:hover { background: rgba(248,81,73,0.1); }
 </style>
 </head>
 <body>
@@ -196,7 +259,30 @@
   <div class="section">
     <div class="section-title">Scenario Editor</div>
     <div class="card">
-      <textarea id="scenario-yaml" spellcheck="false"></textarea>
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('visual')" id="tab-visual-btn">Visual</button>
+        <button class="tab-btn" onclick="switchTab('yaml')" id="tab-yaml-btn">YAML</button>
+      </div>
+
+      <div class="tab-panel active" id="panel-visual" style="padding-top:16px;">
+        <div class="form-row" style="margin-bottom:12px;">
+          <div class="step-field">
+            <label>Scenario Name</label>
+            <input type="text" id="scenario-name" placeholder="My scenario" onchange="syncModelFromFields()">
+          </div>
+          <div class="step-field" style="flex:1;">
+            <label>Description</label>
+            <input type="text" id="scenario-desc" placeholder="Optional description" onchange="syncModelFromFields()" style="width:100%;">
+          </div>
+        </div>
+        <div class="step-list" id="step-list"></div>
+        <button class="btn add-step-btn" onclick="addStep()">+ Add Step</button>
+      </div>
+
+      <div class="tab-panel" id="panel-yaml" style="padding-top:16px;">
+        <textarea id="scenario-yaml" spellcheck="false"></textarea>
+      </div>
+
       <div class="scenario-actions">
         <button class="btn" onclick="validateScenario(this)">Validate (dry-run)</button>
         <button class="btn primary" onclick="runScenario(this)">Run</button>
@@ -336,9 +422,297 @@ async function clearContainer(name, btn) {
   });
 }
 
+let SCENARIO_MODEL = { name: '', description: '', steps: [] };
+
+function defaultStep() {
+  return {
+    id: 'step-' + (SCENARIO_MODEL.steps.length + 1),
+    name: '',
+    type: 'fault',
+    target: '',
+    duration: 5000,
+    latency: null,
+    loss: null,
+    after: [],
+    delay: 0,
+  };
+}
+
+function newStepId() {
+  let n = SCENARIO_MODEL.steps.length + 1;
+  while (SCENARIO_MODEL.steps.some(s => s.id === 'step-' + n)) n++;
+  return 'step-' + n;
+}
+
+function collectStepData(id) {
+  const step = SCENARIO_MODEL.steps.find(s => s.id === id);
+  if (!step) return;
+  step.name = document.getElementById(`sname-${id}`)?.value || '';
+  step.type = document.getElementById(`stype-${id}`)?.value || 'fault';
+  step.target = document.getElementById(`starget-${id}`)?.value || '';
+  step.duration = parseInt(document.getElementById(`sdur-${id}`)?.value) || 5000;
+  step.latency = parseInt(document.getElementById(`slat-${id}`)?.value) || null;
+  step.loss = parseInt(document.getElementById(`sloss-${id}`)?.value) || null;
+  step.delay = parseInt(document.getElementById(`sdelay-${id}`)?.value) || 0;
+  step.after = [];
+  document.querySelectorAll(`.dep-cb-${id}:checked`).forEach(cb => step.after.push(cb.value));
+}
+
+function syncModelFromFields() {
+  SCENARIO_MODEL.name = document.getElementById('scenario-name')?.value || '';
+  SCENARIO_MODEL.description = document.getElementById('scenario-desc')?.value || '';
+  SCENARIO_MODEL.steps.forEach(s => collectStepData(s.id));
+  syncModelToYAML();
+}
+
+function modelToYAML() {
+  const m = SCENARIO_MODEL;
+  let yaml = '';
+  if (m.name) yaml += `name: "${escapeYAML(m.name)}"\n`;
+  if (m.description) yaml += `description: "${escapeYAML(m.description)}"\n`;
+  yaml += '\nsteps:\n';
+  if (m.steps.length === 0) {
+    yaml += '  []\n';
+  } else {
+    for (const s of m.steps) {
+      yaml += `  - id: ${s.id}\n`;
+      if (s.name) yaml += `    name: "${escapeYAML(s.name)}"\n`;
+      yaml += `    type: ${s.type}\n`;
+      if (s.type === 'fault') {
+        yaml += `    target: ${s.target}\n`;
+        yaml += `    duration: ${s.duration}\n`;
+        const faults = [];
+        if (s.latency !== null) faults.push(`      - latency: ${s.latency}`);
+        if (s.loss !== null) faults.push(`      - loss: ${s.loss}`);
+        if (faults.length > 0) {
+          yaml += '    faults:\n' + faults.join('\n') + '\n';
+        } else {
+          yaml += '    faults: []\n';
+        }
+      } else {
+        yaml += `    duration: ${s.duration}\n`;
+      }
+      if (s.after.length > 0) {
+        yaml += `    after: [${s.after.join(', ')}]\n`;
+      }
+      if (s.delay > 0) {
+        yaml += `    delay: ${s.delay}\n`;
+      }
+    }
+  }
+  return yaml;
+}
+
+function syncModelToYAML() {
+  document.getElementById('scenario-yaml').value = modelToYAML();
+}
+
+function parseYAMLToModel(yaml) {
+  const lines = yaml.split('\n');
+  const model = { name: '', description: '', steps: [] };
+  let currentStep = null;
+  let inFaults = false;
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+
+    if (!line.startsWith(' ') && !line.startsWith('\t')) {
+      const m = line.match(/^name:\s*["']?(.+?)["']?\s*$/);
+      if (m) { model.name = m[1]; continue; }
+      const d = line.match(/^description:\s*["']?(.+?)["']?\s*$/);
+      if (d) { model.description = d[1]; continue; }
+    }
+
+    if (line.match(/^\s+-\s+id:\s+/)) {
+      if (currentStep) model.steps.push(currentStep);
+      currentStep = defaultStep();
+      currentStep.id = line.match(/id:\s*(.+)/)[1].trim();
+      currentStep.after = [];
+      currentStep.latency = null;
+      currentStep.loss = null;
+      currentStep.delay = 0;
+      currentStep.name = '';
+      inFaults = false;
+      continue;
+    }
+
+    if (!currentStep) continue;
+
+    const indent4 = line.match(/^\s{4}(\S)/);
+    const indent6 = line.match(/^\s{6}(\S)/);
+    const indent8 = line.match(/^\s{8}(\S)/);
+
+    if (indent8 && inFaults) {
+      const fl = line.match(/-\s+latency:\s*(\d+)/);
+      if (fl) { currentStep.latency = parseInt(fl[1]); continue; }
+      const fp = line.match(/-\s+loss:\s*(\d+)/);
+      if (fp) { currentStep.loss = parseInt(fp[1]); continue; }
+      continue;
+    }
+
+    if (indent6 && inFaults) {
+      const fl = line.match(/-\s+latency:\s*(\d+)/);
+      if (fl) { currentStep.latency = parseInt(fl[1]); continue; }
+      const fp = line.match(/-\s+loss:\s*(\d+)/);
+      if (fp) { currentStep.loss = parseInt(fp[1]); continue; }
+      continue;
+    }
+
+    if (indent4) {
+      const nm = line.match(/name:\s*["']?(.+?)["']?\s*$/);
+      if (nm) { currentStep.name = nm[1]; continue; }
+      const tp = line.match(/type:\s*(.+)/);
+      if (tp) { currentStep.type = tp[1].trim(); continue; }
+      const tg = line.match(/target:\s*(.+)/);
+      if (tg) { currentStep.target = tg[1].trim(); continue; }
+      const dr = line.match(/duration:\s*(\d+)/);
+      if (dr) { currentStep.duration = parseInt(dr[1]); continue; }
+      const af = line.match(/after:\s*\[(.+)\]/);
+      if (af) { currentStep.after = af[1].split(',').map(s => s.trim()); continue; }
+      const dl = line.match(/delay:\s*(\d+)/);
+      if (dl) { currentStep.delay = parseInt(dl[1]); continue; }
+      const fs = line.match(/faults:/);
+      if (fs) { inFaults = true; continue; }
+    }
+  }
+
+  if (currentStep) model.steps.push(currentStep);
+  return model;
+}
+
+function escapeYAML(str) {
+  return String(str).replace(/"/g, '\\"');
+}
+
+function renderSteps() {
+  const list = document.getElementById('step-list');
+  const allIds = SCENARIO_MODEL.steps.map(s => s.id);
+
+  list.innerHTML = SCENARIO_MODEL.steps.map((s, i) => {
+    const depChecks = allIds.filter(id => id !== s.id).map(id =>
+      `<label class="check-label"><input type="checkbox" class="dep-cb-${s.id}" value="${id}" ${s.after.includes(id) ? 'checked' : ''} onchange="syncModelFromFields()"> ${id}</label>`
+    ).join(' ');
+
+    const isFault = s.type === 'fault';
+    return `<div class="step-card">
+      <div class="step-card-header">
+        <span class="step-index">#${i + 1}</span>
+        <label class="step-label">ID</label>
+        <input type="text" class="step-id" id="sid-${s.id}" value="${s.id}" onchange="updateStepId('${s.id}', this.value)">
+        <label class="step-label">Name</label>
+        <input type="text" class="step-name" id="sname-${s.id}" value="${escapeHtmlAttr(s.name)}" placeholder="Step description" onchange="syncModelFromFields()">
+        <button class="btn btn-sm btn-remove" onclick="removeStep('${s.id}')">Remove</button>
+      </div>
+      <div class="step-card-body">
+        <div class="step-field">
+          <label>Type</label>
+          <select id="stype-${s.id}" onchange="onStepTypeChange('${s.id}')">
+            <option value="fault" ${s.type === 'fault' ? 'selected' : ''}>Fault</option>
+            <option value="wait" ${s.type === 'wait' ? 'selected' : ''}>Wait</option>
+          </select>
+        </div>
+        ${isFault ? `
+        <div class="step-field" id="starget-wrap-${s.id}">
+          <label>Target</label>
+          <select id="starget-${s.id}" onchange="syncModelFromFields()">
+            <option value="${s.target}">${s.target || '--'}</option>
+          </select>
+        </div>` : ''}
+        <div class="step-field">
+          <label>Duration (ms)</label>
+          <input type="number" id="sdur-${s.id}" value="${s.duration}" min="0" onchange="syncModelFromFields()">
+        </div>
+        ${isFault ? `
+        <div class="step-field" id="slat-wrap-${s.id}">
+          <label>Latency (ms)</label>
+          <input type="number" id="slat-${s.id}" value="${s.latency ?? ''}" placeholder="none" min="0" onchange="syncModelFromFields()">
+        </div>
+        <div class="step-field" id="sloss-wrap-${s.id}">
+          <label>Loss (%)</label>
+          <input type="number" id="sloss-${s.id}" value="${s.loss ?? ''}" placeholder="none" min="0" max="100" onchange="syncModelFromFields()">
+        </div>` : ''}
+        <div class="step-field">
+          <label>Delay (ms)</label>
+          <input type="number" id="sdelay-${s.id}" value="${s.delay}" min="0" onchange="syncModelFromFields()">
+        </div>
+      </div>
+      <div class="step-card-deps">
+        <span>After:</span>
+        <div class="dep-row">${depChecks || '<span style="color:var(--text-muted)">no other steps</span>'}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  setTimeout(() => populateStepTargets(), 50);
+}
+
+function updateStepId(oldId, newId) {
+  newId = newId.trim() || oldId;
+  if (SCENARIO_MODEL.steps.some(s => s.id === newId && s.id !== oldId)) {
+    document.getElementById(`sid-${oldId}`).value = oldId;
+    return;
+  }
+  SCENARIO_MODEL.steps.forEach(s => {
+    s.after = s.after.map(a => a === oldId ? newId : a);
+  });
+  const step = SCENARIO_MODEL.steps.find(s => s.id === oldId);
+  if (step) step.id = newId;
+  syncModelFromFields();
+  renderSteps();
+}
+
+function onStepTypeChange(id) {
+  collectStepData(id);
+  syncModelToYAML();
+  renderSteps();
+}
+
+function populateStepTargets() {
+  fetch('/api/containers').then(r => r.json()).then(containers => {
+    const running = containers.filter(c => c.status === 'running');
+    SCENARIO_MODEL.steps.forEach(s => {
+      const sel = document.getElementById(`starget-${s.id}`);
+      if (!sel) return;
+      const prev = sel.value || s.target || '';
+      sel.innerHTML = running.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+      if (prev) {
+        for (const o of sel.options) { if (o.value === prev) { sel.value = prev; return; } }
+      }
+      if (running.length > 0) {
+        sel.value = running[0].name;
+      }
+    });
+  });
+}
+
+function addStep() {
+  const step = defaultStep();
+  step.id = newStepId();
+  SCENARIO_MODEL.steps.push(step);
+  syncModelToYAML();
+  renderSteps();
+}
+
+function removeStep(id) {
+  SCENARIO_MODEL.steps = SCENARIO_MODEL.steps.filter(s => s.id !== id);
+  SCENARIO_MODEL.steps.forEach(s => {
+    s.after = s.after.filter(a => a !== id);
+  });
+  syncModelToYAML();
+  renderSteps();
+}
+
+function _getScenarioYAML() {
+  if (document.getElementById('panel-visual').classList.contains('active')) {
+    syncModelFromFields();
+  }
+  return document.getElementById('scenario-yaml').value;
+}
+
 async function validateScenario(btn) {
-  const yaml = document.getElementById('scenario-yaml').value;
-  if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
+  const yaml = _getScenarioYAML();
+  if (!yaml.trim()) { alert('Enter a scenario first.'); return; }
   const out = document.getElementById('scenario-output');
   out.className = 'output visible';
   out.textContent = 'Validating...';
@@ -360,8 +734,8 @@ async function validateScenario(btn) {
 }
 
 async function runScenario(btn) {
-  const yaml = document.getElementById('scenario-yaml').value;
-  if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
+  const yaml = _getScenarioYAML();
+  if (!yaml.trim()) { alert('Enter a scenario first.'); return; }
   if (!confirm('Run this scenario?')) return;
   const out = document.getElementById('scenario-output');
   out.className = 'output visible';
@@ -388,14 +762,44 @@ async function loadTemplate(btn) {
     const resp = await fetch('/api/scenario/template');
     if (!resp.ok) throw new Error('Template not found');
     const data = await resp.json();
-    document.getElementById('scenario-yaml').value = data.yaml;
+    SCENARIO_MODEL = parseYAMLToModel(data.yaml);
+    document.getElementById('scenario-name').value = SCENARIO_MODEL.name || '';
+    document.getElementById('scenario-desc').value = SCENARIO_MODEL.description || '';
+    syncModelToYAML();
+    switchTab('visual');
   });
+}
+
+function switchTab(tab) {
+  if (tab === 'yaml') {
+    syncModelFromFields();
+  } else {
+    const yaml = document.getElementById('scenario-yaml').value;
+    if (yaml.trim()) {
+      try {
+        SCENARIO_MODEL = parseYAMLToModel(yaml);
+      } catch (e) {
+        const out = document.getElementById('scenario-output');
+        out.className = 'output visible error';
+        out.textContent = 'Cannot parse YAML: ' + e.message + '. Fix the YAML or switch back.';
+      }
+    }
+    document.getElementById('scenario-name').value = SCENARIO_MODEL.name || '';
+    document.getElementById('scenario-desc').value = SCENARIO_MODEL.description || '';
+    renderSteps();
+  }
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === `tab-${tab}-btn`));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tab}`));
 }
 
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+function escapeHtmlAttr(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function startCountdown() {
