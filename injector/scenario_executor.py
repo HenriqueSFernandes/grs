@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import time
+import uuid
 
 import injector
 from injector.scenario_loader import load
@@ -54,10 +55,13 @@ def dry_run(path: str):
 def _run_sidecar(step):
     """Launch a sidecar container for a fault step and return the Popen object."""
     tag = f"{SIDECAR_IMAGE}:{SIDECAR_VERSION}"
+    container_name = f"chaos-{step.target}-{uuid.uuid4().hex[:6]}"
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container_name,
         "--privileged",
         "--pid=host",
         "-v",

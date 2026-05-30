@@ -1,16 +1,28 @@
 """CLI entry point for the chaos injector."""
 
 import argparse
+import json
 import sys
 import time
 
 from injector.docker_client import get_container_pid
 from injector.network_chaos import (
+    _get_current_netem_params,
     add_composite_fault,
     add_latency,
     add_loss,
     clear_rules,
 )
+
+
+def _run_monitor(args: argparse.Namespace):
+    import uvicorn
+
+    from injector.monitor import app
+
+    port = args.monitor_port
+    print(f"Starting chaos monitor on port {port}...", file=sys.stderr)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 def main():
@@ -20,13 +32,12 @@ def main():
     parser.add_argument(
         "--target",
         "-t",
-        required=True,
         help="Name or ID of the target container.",
     )
     parser.add_argument(
         "--action",
         "-a",
-        choices=["latency", "loss", "clear"],
+        choices=["latency", "loss", "clear", "status", "monitor"],
         help="Chaos action to apply.",
     )
     parser.add_argument(
@@ -51,8 +62,18 @@ def main():
         type=int,
         help="Duration in milliseconds before auto-clearing the fault.",
     )
+    parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=8080,
+        help="Port for the monitor HTTP server (default: 8080).",
+    )
 
     args = parser.parse_args()
+
+    if args.action == "monitor":
+        _run_monitor(args)
+        sys.exit(0)
 
     has_composite = args.latency is not None or args.loss is not None
     has_legacy = args.action is not None
@@ -65,8 +86,27 @@ def main():
             "Must specify either --action or composite flags (--latency, --loss)."
         )
 
+    if not args.target:
+        parser.error("--target is required.")
+
     if has_legacy and args.action in ("latency", "loss") and args.value is None:
         parser.error(f"--value is required when action is '{args.action}'.")
+
+    if has_legacy and args.action == "status":
+        try:
+            pid = get_container_pid(args.target)
+            params = _get_current_netem_params(pid)
+            output = {
+                "status": "running",
+                "latency_ms": params.get("delay"),
+                "loss_pct": params.get("loss"),
+            }
+            print(json.dumps(output))
+        except ValueError as exc:
+            output = {"status": "error", "error": str(exc)}
+            print(json.dumps(output))
+            sys.exit(1)
+        sys.exit(0)
 
     try:
         pid = get_container_pid(args.target)

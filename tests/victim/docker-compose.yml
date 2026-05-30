@@ -1,0 +1,21 @@
+services:
+  victim1:
+    container_name: victim1
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: victim-image:latest
+
+  victim2:
+    container_name: victim2
+    image: victim-image:latest
+    pull_policy: never
+    depends_on:
+      - victim1
+
+  victim3:
+    container_name: victim3
+    image: victim-image:latest
+    pull_policy: never
+    depends_on:
+      - victim1

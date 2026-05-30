@@ -1,0 +1,475 @@
+"""FastAPI web server for chaos dashboard and API."""
+
+import asyncio
+import json
+import os
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from collections import deque
+from pathlib import Path
+from queue import Empty, Queue
+from urllib.request import Request, urlopen
+from urllib.error import URLError
+
+import docker
+import injector
+from injector import MONITOR_NAME, MONITOR_PORT
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
+from pydantic import BaseModel
+
+app = FastAPI(title="Network Chaos Dashboard", version=injector.__version__)
+
+_templates_dir = Path(__file__).parent / "templates"
+
+_docker_client = docker.from_env()
+
+SIDECAR_IMAGE = "rickysf/chaos-sidecar"
+SIDECAR_VERSION = injector.__version__
+
+_sidecar_tag: str | None = None
+_monitor_url: str | None = None
+
+_log_queue: Queue = Queue()
+_log_history: list[str] = []
+
+_metrics_history: deque = deque(maxlen=60)
+_metrics_history_lock = threading.Lock()
+_metrics_stop = threading.Event()
+
+
+class _LogStream:
+    """Wraps write calls and pushes complete lines to the global log queue."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def write(self, s: str) -> None:
+        for ch in s:
+            if ch == "\n":
+                if self._buf:
+                    _log_history.append(self._buf)
+                    _log_queue.put(self._buf)
+                self._buf = ""
+            else:
+                self._buf += ch
+
+    def flush(self) -> None:
+        pass
+
+
+def _ensure_sidecar_image() -> str:
+    global _sidecar_tag
+    if _sidecar_tag:
+        return _sidecar_tag
+    tag = f"{SIDECAR_IMAGE}:{SIDECAR_VERSION}"
+    result = subprocess.run(
+        ["docker", "images", "-q", tag],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Docker is not available.")
+    if not result.stdout.strip():
+        subprocess.run(["docker", "pull", tag], check=False)
+    _sidecar_tag = tag
+    return tag
+
+
+def _ensure_monitor() -> str:
+    """Ensure the monitor sidecar is running, returning its base URL."""
+    global _monitor_url
+    if _monitor_url:
+        return _monitor_url
+
+    try:
+        c = _docker_client.containers.get(MONITOR_NAME)
+        if c.status != "running":
+            c.start()
+    except docker.errors.NotFound:
+        tag = _ensure_sidecar_image()
+        _docker_client.containers.run(
+            image=tag,
+            name=MONITOR_NAME,
+            privileged=True,
+            pid_mode="host",
+            detach=True,
+            remove=True,
+            volumes={
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
+            },
+            ports={"8080/tcp": MONITOR_PORT},
+            command=["--action", "monitor", "--monitor-port", "8080"],
+        )
+    except docker.errors.APIError:
+        pass
+
+    _monitor_url = f"http://localhost:{MONITOR_PORT}"
+    return _monitor_url
+
+
+def _monitor_get(path: str) -> dict | None:
+    """Make a GET request to the monitor sidecar and return parsed JSON."""
+    try:
+        base = _ensure_monitor()
+        req = Request(f"{base}{path}")
+        req.add_header("Accept", "application/json")
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except (URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _query_tc_metrics(name: str) -> dict:
+    data = _monitor_get(f"/metrics/{name}")
+    if data is None:
+        return {"latency_ms": None, "loss_pct": None}
+    return {
+        "latency_ms": data.get("latency_ms"),
+        "loss_pct": data.get("loss_pct"),
+    }
+
+
+def _get_tc_metrics_batch(names: list[str]) -> dict[str, dict]:
+    data = _monitor_get("/metrics/all")
+    if data is None:
+        return {name: {"latency_ms": None, "loss_pct": None} for name in names}
+    return {
+        name: {
+            "latency_ms": data[name].get("latency_ms") if name in data else None,
+            "loss_pct": data[name].get("loss_pct") if name in data else None,
+        }
+        for name in names
+    }
+
+
+def _start_metrics_collector():
+    """Background thread that polls the monitor and fills the history buffer."""
+    global _metrics_history
+
+    def _loop():
+        while not _metrics_stop.is_set():
+            try:
+                tc_data = _monitor_get("/metrics/all")
+                ping_data = _monitor_get("/ping/all")
+                snapshot = {
+                    "ts": time.time(),
+                    "containers": tc_data or {},
+                    "pings": ping_data or {},
+                }
+                with _metrics_history_lock:
+                    _metrics_history.append(snapshot)
+            except Exception:
+                pass
+            _metrics_stop.wait(2.0)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+
+@app.on_event("startup")
+async def _on_startup():
+    _ensure_monitor()
+    _start_metrics_collector()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    _metrics_stop.set()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    html_path = _templates_dir / "dashboard.html"
+    return HTMLResponse(content=html_path.read_text())
+
+
+@app.get("/api/containers")
+async def list_containers():
+    containers = _docker_client.containers.list(all=True)
+    running_names = [c.name for c in containers if c.status == "running"]
+    tc_batch = _get_tc_metrics_batch(running_names) if running_names else {}
+    result = []
+    for c in containers:
+        status = c.status
+        tc_metrics = tc_batch.get(c.name, {"latency_ms": None, "loss_pct": None})
+        try:
+            image_tag = c.image.tags[0] if c.image.tags else "unknown"
+        except docker.errors.ImageNotFound:
+            image_tag = "unknown"
+        result.append(
+            {
+                "name": c.name,
+                "id": c.short_id,
+                "image": image_tag,
+                "status": status,
+                "latency_ms": tc_metrics.get("latency_ms"),
+                "loss_pct": tc_metrics.get("loss_pct"),
+            }
+        )
+    return result
+
+
+@app.get("/api/containers/{name}")
+async def get_container(name: str):
+    try:
+        c = _docker_client.containers.get(name)
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found.")
+
+    status = c.status
+    tc_metrics = {"latency_ms": None, "loss_pct": None}
+    if status == "running":
+        tc_metrics = _query_tc_metrics(c.name)
+
+    return {
+        "name": c.name,
+        "id": c.short_id,
+        "image": c.image.tags[0] if c.image.tags else "unknown",
+        "status": status,
+        "latency_ms": tc_metrics.get("latency_ms"),
+        "loss_pct": tc_metrics.get("loss_pct"),
+    }
+
+
+class InjectRequest(BaseModel):
+    target: str
+    action: str | None = None
+    value: int | None = None
+    latency: int | None = None
+    loss: int | None = None
+    duration: int | None = None
+
+
+@app.post("/api/inject")
+async def inject_fault(req: InjectRequest):
+    has_composite = req.latency is not None or req.loss is not None
+    has_legacy = req.action is not None
+
+    if has_legacy and has_composite:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot mix --action/--value with --latency/--loss.",
+        )
+    if not has_legacy and not has_composite:
+        raise HTTPException(
+            status_code=400,
+            detail="Must specify either action or latency/loss.",
+        )
+    if has_legacy and req.action in ("latency", "loss") and req.value is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"--value is required when action is '{req.action}'.",
+        )
+
+    try:
+        _ = _docker_client.containers.get(req.target)
+    except docker.errors.NotFound:
+        raise HTTPException(
+            status_code=404, detail=f"Container '{req.target}' not found."
+        )
+
+    tag = _ensure_sidecar_image()
+    container_name = f"chaos-{req.target}-{uuid.uuid4().hex[:6]}"
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        container_name,
+        "--privileged",
+        "--pid=host",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        tag,
+        "--target",
+        req.target,
+    ]
+
+    if has_legacy:
+        cmd.extend(["--action", req.action])
+        if req.value is not None:
+            cmd.extend(["--value", str(req.value)])
+    else:
+        if req.latency is not None:
+            cmd.extend(["--latency", str(req.latency)])
+        if req.loss is not None:
+            cmd.extend(["--loss", str(req.loss)])
+
+    if req.duration is not None:
+        cmd.extend(["--duration", str(req.duration)])
+
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"status": "accepted", "target": req.target}
+
+
+@app.post("/api/clear/{name}")
+async def clear_container(name: str):
+    try:
+        _ = _docker_client.containers.get(name)
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found.")
+
+    tag = _ensure_sidecar_image()
+    container_name = f"chaos-{name}-clear-{uuid.uuid4().hex[:6]}"
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        container_name,
+        "--privileged",
+        "--pid=host",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        tag,
+        "--target",
+        name,
+        "--action",
+        "clear",
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500, detail=result.stderr.strip() or result.stdout.strip()
+        )
+    return {"status": "cleared", "target": name}
+
+
+class ScenarioRequest(BaseModel):
+    yaml: str
+    dry_run: bool = False
+
+
+@app.post("/api/scenario/run")
+async def run_scenario(req: ScenarioRequest):
+    try:
+        import yaml as _yaml
+
+        _yaml.safe_load(req.yaml)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}")
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(req.yaml)
+        tmp_path = f.name
+
+    if req.dry_run:
+        try:
+            from injector import scenario_executor
+            from io import StringIO
+            import sys
+
+            old_stdout = sys.stdout
+            sys.stdout = buffer = StringIO()
+            try:
+                scenario_executor.dry_run(tmp_path)
+            except ValueError as exc:
+                sys.stdout = old_stdout
+                raise HTTPException(status_code=400, detail=str(exc))
+            finally:
+                sys.stdout = old_stdout
+
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+            return {"status": "validated", "output": buffer.getvalue()}
+        except HTTPException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    global _log_queue, _log_history
+    _log_queue = Queue()
+    _log_history = []
+
+    import threading
+
+    def _execute():
+        import sys as _sys
+        from injector import scenario_executor as _exec
+
+        stream = _LogStream()
+        old_stdout = _sys.stdout
+        old_stderr = _sys.stderr
+        _sys.stdout = stream
+        _sys.stderr = stream
+        try:
+            try:
+                _exec.execute(tmp_path)
+            except SystemExit:
+                pass
+        finally:
+            _sys.stdout = old_stdout
+            _sys.stderr = old_stderr
+            if stream._buf:
+                _log_history.append(stream._buf)
+                _log_queue.put(stream._buf)
+            _log_queue.put(None)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    threading.Thread(target=_execute, daemon=True).start()
+    return {"status": "running"}
+
+
+@app.get("/api/scenario/template")
+async def scenario_template():
+    template_path = Path(__file__).parent.parent / "examples" / "full-test.yaml"
+    if not template_path.exists():
+        raise HTTPException(status_code=404, detail="Template not found.")
+    return {"yaml": template_path.read_text()}
+
+
+@app.get("/api/scenario/logs")
+async def scenario_logs():
+    async def generate():
+        for line in _log_history:
+            yield f"data: {line}\n\n"
+
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                line = await loop.run_in_executor(
+                    None, lambda: _log_queue.get(timeout=30)
+                )
+                if line is None:
+                    yield "data: [DONE]\n\n"
+                    break
+                yield f"data: {line}\n\n"
+            except Empty:
+                yield "data: [KEEPALIVE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/metrics/stream")
+async def metrics_stream():
+    """SSE endpoint that pushes live metrics snapshots (tc rules + pings)."""
+
+    async def generate():
+        while not _metrics_stop.is_set():
+            with _metrics_history_lock:
+                if _metrics_history:
+                    latest = _metrics_history[-1]
+                    yield f"data: {json.dumps(latest)}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/metrics/history")
+async def metrics_history():
+    """Return the last 60 snapshots of metrics history."""
+    with _metrics_history_lock:
+        return list(_metrics_history)
