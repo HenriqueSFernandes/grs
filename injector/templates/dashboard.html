@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Chaos Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d2991d;
+    --btn-bg: #21262d;
+    --btn-hover: #30363d;
+    --input-bg: #0d1117;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .header {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; color: var(--accent); }
+  .header .refresh-info { font-size: 12px; color: var(--text-muted); }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+  .stat {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 24px;
+    flex: 1;
+    text-align: center;
+  }
+  .stat .value { font-size: 28px; font-weight: 700; }
+  .stat .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat.total .value { color: var(--accent); }
+  .stat.running .value { color: var(--green); }
+  .stat.impaired .value { color: var(--yellow); }
+
+  .section { margin-bottom: 24px; }
+  .section-title {
+    font-size: 14px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 12px;
+  }
+
+  table {
+    width: 100%; border-collapse: collapse;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
+  }
+  thead { background: var(--btn-bg); }
+  th {
+    padding: 10px 16px; text-align: left; font-size: 12px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);
+  }
+  td { padding: 10px 16px; font-size: 13px; border-top: 1px solid var(--border); }
+  tr:hover td { background: rgba(88,166,255,0.05); }
+
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.running { background: var(--green); }
+  .status-dot.exited, .status-dot.dead { background: var(--red); }
+  .status-dot.other { background: var(--yellow); }
+  .metric-active { color: var(--yellow); font-weight: 600; }
+  .metric-none { color: var(--text-muted); }
+
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 5px 10px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--btn-bg); color: var(--text); cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--btn-hover); }
+  .btn.danger { color: var(--red); border-color: rgba(248,81,73,0.3); }
+  .btn.danger:hover { background: rgba(248,81,73,0.1); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.primary:hover { opacity: 0.9; }
+
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  select, input, textarea {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; font-family: inherit;
+  }
+  select:focus, input:focus, textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
+  }
+  textarea {
+    width: 100%; min-height: 240px; font-family: "SF Mono", "Fira Code", "Fira Mono", monospace;
+    font-size: 12px; line-height: 1.6; resize: vertical;
+  }
+  .scenario-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .output {
+    background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; margin-top: 12px; font-family: monospace; font-size: 12px;
+    white-space: pre-wrap; max-height: 300px; overflow-y: auto; display: none;
+  }
+  .output.visible { display: block; }
+  .output.error { color: var(--red); border-color: rgba(248,81,73,0.3); }
+  .empty-state { text-align: center; padding: 32px; color: var(--text-muted); font-size: 14px; }
+  .container-name { font-family: monospace; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Network Chaos Dashboard</h1>
+  <div class="refresh-info">Auto-refresh: <span id="refresh-countdown">3s</span></div>
+</div>
+
+<div class="container">
+  <div class="stats">
+    <div class="stat total">
+      <div class="value" id="stat-total">0</div>
+      <div class="label">Total Containers</div>
+    </div>
+    <div class="stat running">
+      <div class="value" id="stat-running">0</div>
+      <div class="label">Running</div>
+    </div>
+    <div class="stat impaired">
+      <div class="value" id="stat-impaired">0</div>
+      <div class="label">Impaired</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Containers</div>
+    <div id="containers-table">
+      <div class="empty-state">Loading containers...</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Quick Inject</div>
+    <div class="card">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="inj-target">Target</label>
+          <select id="inj-target"></select>
+        </div>
+        <div class="form-group">
+          <label for="inj-action">Fault</label>
+          <select id="inj-action">
+            <option value="latency">Latency</option>
+            <option value="loss">Packet Loss</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="inj-value">Value</label>
+          <input type="number" id="inj-value" placeholder="500" min="0" style="width:100px">
+        </div>
+        <div class="form-group">
+          <label for="inj-duration">Duration (ms)</label>
+          <input type="number" id="inj-duration" placeholder="auto-clear" min="0" style="width:120px">
+        </div>
+        <button class="btn primary" onclick="injectFault()">Inject</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Scenario Editor</div>
+    <div class="card">
+      <textarea id="scenario-yaml" spellcheck="false"></textarea>
+      <div class="scenario-actions">
+        <button class="btn" onclick="validateScenario()">Validate (dry-run)</button>
+        <button class="btn primary" onclick="runScenario()">Run</button>
+        <button class="btn" onclick="loadTemplate()">Load Template</button>
+      </div>
+      <div class="output" id="scenario-output"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const POLL_INTERVAL = 5000;
+let countdown = 3;
+
+function formatMetric(val, suffix) {
+  if (val === null || val === undefined) return '<span class="metric-none">--</span>';
+  return `<span class="metric-active">${val}${suffix}</span>`;
+}
+
+function statusDot(status) {
+  const cls = (status === 'running') ? 'running' : (status === 'exited' || status === 'dead') ? 'exited' : 'other';
+  return `<span class="status-dot ${cls}"></span>`;
+}
+
+async function fetchContainers() {
+  try {
+    const resp = await fetch('/api/containers');
+    const containers = await resp.json();
+    renderTable(containers);
+    renderStats(containers);
+    populateTargets(containers);
+  } catch (e) {
+    console.error('Failed to fetch containers:', e);
+  }
+}
+
+function renderStats(containers) {
+  const total = containers.length;
+  const running = containers.filter(c => c.status === 'running').length;
+  const impaired = containers.filter(c => c.latency_ms !== null || c.loss_pct !== null).length;
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-running').textContent = running;
+  document.getElementById('stat-impaired').textContent = impaired;
+}
+
+function renderTable(containers) {
+  const el = document.getElementById('containers-table');
+  if (containers.length === 0) {
+    el.innerHTML = '<div class="empty-state">No containers found.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Name</th><th>Status</th><th>Latency</th><th>Loss</th><th style="width:120px">Actions</th></tr></thead><tbody>';
+  for (const c of containers) {
+    html += '<tr>';
+    html += `<td><span class="container-name" title="${c.image}">${escapeHtml(c.name)}</span></td>`;
+    html += `<td>${statusDot(c.status)}${escapeHtml(c.status)}</td>`;
+    html += `<td>${formatMetric(c.latency_ms, 'ms')}</td>`;
+    html += `<td>${formatMetric(c.loss_pct, '%')}</td>`;
+    html += '<td><div class="actions">';
+    if (c.status === 'running') {
+      html += `<button class="btn danger" onclick="clearContainer('${escapeHtml(c.name)}')" title="Clear faults">Clear</button>`;
+    }
+    html += '</div></td></tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function populateTargets(containers) {
+  const sel = document.getElementById('inj-target');
+  const current = sel.value;
+  sel.innerHTML = '';
+  for (const c of containers) {
+    if (c.status === 'running') {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    }
+  }
+  if (current) {
+    for (const opt of sel.options) {
+      if (opt.value === current) { sel.value = current; break; }
+    }
+  }
+}
+
+async function injectFault() {
+  const target = document.getElementById('inj-target').value;
+  const action = document.getElementById('inj-action').value;
+  const value = parseInt(document.getElementById('inj-value').value);
+  const duration = document.getElementById('inj-duration').value;
+
+  if (!target) { alert('Select a target container.'); return; }
+  if (isNaN(value) || value < 0) { alert('Enter a valid value.'); return; }
+
+  const body = { target, action, value };
+  if (duration) body.duration = parseInt(duration);
+
+  try {
+    const resp = await fetch('/api/inject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert(`Error: ${err.detail}`);
+      return;
+    }
+    fetchContainers();
+  } catch (e) {
+    alert('Failed to inject fault: ' + e);
+  }
+}
+
+async function clearContainer(name) {
+  if (!confirm(`Clear all faults on "${name}"?`)) return;
+  try {
+    const resp = await fetch(`/api/clear/${encodeURIComponent(name)}`, { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert(`Error: ${err.detail}`);
+      return;
+    }
+    fetchContainers();
+  } catch (e) {
+    alert('Failed to clear: ' + e);
+  }
+}
+
+async function validateScenario() {
+  const yaml = document.getElementById('scenario-yaml').value;
+  if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
+  const out = document.getElementById('scenario-output');
+  out.className = 'output visible';
+  out.textContent = 'Validating...';
+  try {
+    const resp = await fetch('/api/scenario/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml, dry_run: true }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      out.className = 'output visible error';
+      out.textContent = data.detail;
+    } else {
+      out.className = 'output visible';
+      out.textContent = 'Scenario is valid.';
+    }
+  } catch (e) {
+    out.className = 'output visible error';
+    out.textContent = 'Error: ' + e;
+  }
+}
+
+async function runScenario() {
+  const yaml = document.getElementById('scenario-yaml').value;
+  if (!yaml.trim()) { alert('Enter a scenario YAML first.'); return; }
+  if (!confirm('Run this scenario?')) return;
+  const out = document.getElementById('scenario-output');
+  out.className = 'output visible';
+  out.textContent = 'Running scenario...';
+  try {
+    const resp = await fetch('/api/scenario/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml, dry_run: false }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      out.className = 'output visible error';
+      out.textContent = data.detail;
+    } else {
+      out.className = 'output visible';
+      out.textContent = 'Scenario launched. Watch the containers for updates.';
+    }
+  } catch (e) {
+    out.className = 'output visible error';
+    out.textContent = 'Error: ' + e;
+  }
+}
+
+async function loadTemplate() {
+  try {
+    const resp = await fetch('/api/scenario/template');
+    if (!resp.ok) throw new Error('Template not found');
+    const data = await resp.json();
+    document.getElementById('scenario-yaml').value = data.yaml;
+  } catch (e) {
+    alert('Failed to load template: ' + e);
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function startCountdown() {
+  countdown = 3;
+  document.getElementById('refresh-countdown').textContent = countdown + 's';
+  const interval = setInterval(() => {
+    countdown--;
+    document.getElementById('refresh-countdown').textContent = countdown + 's';
+    if (countdown <= 0) { countdown = 3; }
+  }, 1000);
+}
+
+fetchContainers();
+startCountdown();
+setInterval(fetchContainers, POLL_INTERVAL);
+</script>
+</body>
+</html>

@@ -26,6 +26,8 @@ classifiers = [
 dependencies = [
     "docker>=7.0.0",
     "pyyaml>=6.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.scripts]
@@ -47,3 +49,4 @@ packages = ["injector"]
 "Dockerfile" = "Dockerfile"
 "pyproject.toml" = "pyproject.toml"
 "README.md" = "README.md"
+"injector/templates" = "injector/templates"

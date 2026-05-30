@@ -213,6 +213,36 @@ def _build_run_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_serve_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Start the chaos dashboard web server."
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=8080,
+        help="Port to listen on (default: 8080).",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to (default: 0.0.0.0).",
+    )
+    return parser
+
+
+def _serve(args: argparse.Namespace):
+    import uvicorn
+
+    uvicorn.run(
+        "injector.web_server:app",
+        host=args.host,
+        port=args.port,
+        log_level="info",
+    )
+
+
 def main():
     args_list = sys.argv[1:]
 
@@ -230,6 +260,10 @@ def main():
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+    elif args_list and args_list[0] == "serve":
+        parser = _build_serve_parser()
+        args = parser.parse_args(args_list[1:])
+        _serve(args)
     else:
         parser = _build_direct_parser()
         args = parser.parse_args(args_list)

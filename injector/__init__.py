@@ -5,5 +5,8 @@ __all__ = [
     "cli",
     "docker_client",
     "network_chaos",
+    "scenario_executor",
+    "scenario_loader",
     "sidecar_runner",
+    "web_server",
 ]

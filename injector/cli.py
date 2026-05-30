@@ -1,11 +1,13 @@
 """CLI entry point for the chaos injector."""
 
 import argparse
+import json
 import sys
 import time
 
 from injector.docker_client import get_container_pid
 from injector.network_chaos import (
+    _get_current_netem_params,
     add_composite_fault,
     add_latency,
     add_loss,
@@ -26,7 +28,7 @@ def main():
     parser.add_argument(
         "--action",
         "-a",
-        choices=["latency", "loss", "clear"],
+        choices=["latency", "loss", "clear", "status"],
         help="Chaos action to apply.",
     )
     parser.add_argument(
@@ -67,6 +69,22 @@ def main():
 
     if has_legacy and args.action in ("latency", "loss") and args.value is None:
         parser.error(f"--value is required when action is '{args.action}'.")
+
+    if has_legacy and args.action == "status":
+        try:
+            pid = get_container_pid(args.target)
+            params = _get_current_netem_params(pid)
+            output = {
+                "status": "running",
+                "latency_ms": params.get("delay"),
+                "loss_pct": params.get("loss"),
+            }
+            print(json.dumps(output))
+        except ValueError as exc:
+            output = {"status": "error", "error": str(exc)}
+            print(json.dumps(output))
+            sys.exit(1)
+        sys.exit(0)
 
     try:
         pid = get_container_pid(args.target)
