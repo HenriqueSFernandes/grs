@@ -86,6 +86,27 @@ steps:
                 scenario_executor.dry_run(f.name)
             mock_run.assert_not_called()
 
+    def test_dry_run_includes_delay_for_root_steps(self):
+        yaml = """
+name: "Delayed root"
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    delay: 250
+    faults:
+      - loss: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with patch("builtins.print") as mock_print:
+                scenario_executor.dry_run(f.name)
+
+        printed = [call.args[0] for call in mock_print.call_args_list if call.args]
+        assert any("T+250ms" in line and "s1" in line for line in printed)
+
 
 class TestSequentialExecution:
     """Scenario scheduler runs steps in DAG order."""
@@ -303,8 +324,8 @@ steps:
     @patch("injector.scenario_executor.time.sleep")
     @patch("injector.scenario_executor._run_sidecar")
     def test_parallel_steps_with_different_delays(self, mock_run_sidecar, mock_sleep):
-        """Steps with different delays in the same frontier should launch
-        independently without blocking each other."""
+        """Steps with different delays in the same frontier launch
+        incrementally: delay=0 first, then sleep delta before delay=500."""
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 0
         mock_run_sidecar.return_value = mock_proc

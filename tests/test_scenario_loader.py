@@ -263,6 +263,106 @@ steps:
             with pytest.raises(ValueError, match="list"):
                 scenario_loader.load(f.name)
 
+    def test_rejects_missing_required_field(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="missing required field"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_faults_not_a_list(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      latency: 500
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="list of single-key"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_fault_not_a_mapping(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - latency
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="list of single-key"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_multi_key_fault(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - latency: 500
+        loss: 20
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="single-key mapping"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_unknown_fault_action(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - foo: 1
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="unknown fault action"):
+                scenario_loader.load(f.name)
+
+    def test_rejects_after_list_with_non_string(self):
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 1000
+    after: [1]
+    faults:
+      - latency: 200
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(ValueError, match="after must contain only strings"):
+                scenario_loader.load(f.name)
+
 
 class TestLoadValidScenario:
     """Happy-path parsing of well-formed scenario files."""

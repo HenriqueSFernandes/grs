@@ -17,7 +17,12 @@ uv pip install -e .
 ```
 
 ## Running / verifying changes
-Run unit tests locally with `pytest`; manual verification is still possible against a victim container:
+Run the pytest suite locally:
+```bash
+pytest
+```
+
+Manual verification is still possible against a victim container:
 ```bash
 # Build and run the victim
 docker build -t chaos-victim tests/victim

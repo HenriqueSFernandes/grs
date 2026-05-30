@@ -28,8 +28,8 @@ def dry_run(path: str):
             return start_times[step_id]
         step = next(s for s in scenario.steps if s.id == step_id)
         if not step.after:
-            start_times[step_id] = 0
-            return 0
+            start_times[step_id] = step.delay
+            return step.delay
         dep_ends = []
         for dep_id in step.after:
             dep_start = _compute_start(dep_id)
@@ -46,7 +46,9 @@ def dry_run(path: str):
         t = start_times[step.id]
         name = step.name or step.id
         extra = f"target: {step.target}" if step.type == "fault" else "wait"
-        print(f"T+{t}ms  {step.id}  {name}  ({extra}, {step.duration}ms)")
+        deps = f", after: {step.after}" if step.after else ""
+        delay = f", delay: {step.delay}ms" if step.delay else ""
+        print(f"T+{t}ms  {step.id}  {name}  ({extra}, {step.duration}ms{deps}{delay})")
 
 
 def _run_sidecar(step):
@@ -71,7 +73,7 @@ def _run_sidecar(step):
         for action, value in fault.items():
             cmd.extend([f"--{action}", str(value)])
 
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def execute(path: str):

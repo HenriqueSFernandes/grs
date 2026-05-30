@@ -92,13 +92,16 @@ def main():
         elif args.action == "clear":
             clear_rules(pid)
             print(f"Cleared all tc rules from container '{args.target}'.")
-    except RuntimeError as exc:
+    except (ValueError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     if args.duration is not None and (
         has_composite or args.action in ("latency", "loss")
     ):
+        if args.duration < 0:
+            print("Error: --duration must be non-negative.", file=sys.stderr)
+            sys.exit(1)
         time.sleep(args.duration / 1000.0)
         try:
             clear_rules(pid)

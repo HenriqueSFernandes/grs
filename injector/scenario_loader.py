@@ -145,6 +145,10 @@ def load(path: str) -> Scenario:
         if not isinstance(raw, dict):
             raise ValueError("Each step must be a mapping.")
 
+        for required in ("id", "type", "duration"):
+            if required not in raw:
+                raise ValueError(f"Step is missing required field '{required}'.")
+
         step = Step(
             id=raw["id"],
             type=raw["type"],
@@ -161,7 +165,35 @@ def load(path: str) -> Scenario:
         elif not isinstance(after, list):
             raise ValueError(f"Step '{step.id}' after must be a string or list.")
         else:
+            for item in after:
+                if not isinstance(item, str):
+                    raise ValueError(
+                        f"Step '{step.id}' after must contain only strings."
+                    )
             step.after = after
+
+        # Validate faults schema: list of single-key mappings with known actions
+        if step.faults:
+            if not isinstance(step.faults, list):
+                raise ValueError(
+                    f"Step '{step.id}' faults must be a list of single-key mappings."
+                )
+            known_actions = {"latency", "loss"}
+            for fault in step.faults:
+                if not isinstance(fault, dict):
+                    raise ValueError(
+                        f"Step '{step.id}' faults must be a list of single-key mappings."
+                    )
+                if len(fault) != 1:
+                    raise ValueError(
+                        f"Step '{step.id}' each fault must be a single-key mapping."
+                    )
+                action = next(iter(fault))
+                if action not in known_actions:
+                    raise ValueError(
+                        f"Step '{step.id}' unknown fault action '{action}'. "
+                        f"Supported: {', '.join(sorted(known_actions))}."
+                    )
 
         _validate_step(step)
         scenario.steps.append(step)
