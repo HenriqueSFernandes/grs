@@ -213,3 +213,89 @@ steps:
 
         # Only s1 launched; s2 never started because s1 failed
         assert mock_run_sidecar.call_count == 1
+
+
+class TestParallelExecution:
+    """Steps with no dependencies run concurrently."""
+
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_parallel_steps_launch_together(self, mock_run_sidecar):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 5000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 3000
+    faults:
+      - latency: 200
+  - id: s3
+    type: fault
+    target: c3
+    duration: 2000
+    after: [s1, s2]
+    faults:
+      - latency: 100
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        # s1 and s2 launched together (frontier 1), then s3 (frontier 2)
+        assert mock_run_sidecar.call_count == 3
+        first_batch = [call.args[0].id for call in mock_run_sidecar.call_args_list[:2]]
+        assert sorted(first_batch) == ["s1", "s2"]
+        assert mock_run_sidecar.call_args_list[2].args[0].id == "s3"
+
+    @patch("injector.scenario_executor.time.sleep")
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_parallel_with_delay_and_wait(self, mock_run_sidecar, mock_sleep):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 1000
+    faults:
+      - latency: 200
+  - id: pause
+    type: wait
+    duration: 500
+    after: [s1, s2]
+  - id: s3
+    type: fault
+    target: c3
+    duration: 1000
+    after: [pause]
+    delay: 300
+    faults:
+      - latency: 100
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        assert mock_run_sidecar.call_count == 3
+        # wait step sleeps locally
+        mock_sleep.assert_any_call(0.5)
+        # delay before s3
+        mock_sleep.assert_any_call(0.3)

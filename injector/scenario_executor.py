@@ -82,23 +82,43 @@ def execute(path: str):
     running = {}
     failed = False
 
-    # Initial ready frontier: steps with no dependencies
-    ready = [s for s in scenario.steps if not s.after]
+    print(f"Running scenario: {scenario.name or '(untitled)'}\n")
 
-    while ready or running:
+    while True:
+        # Compute ready frontier
+        ready = [
+            s
+            for s in scenario.steps
+            if s.id not in done
+            and s.id not in running
+            and all(dep in done for dep in s.after)
+        ]
+
+        if not ready and not running:
+            break
+
         # Launch all ready steps
         for step in ready:
+            if step.delay > 0:
+                print(f"  [delay] Waiting {step.delay}ms before '{step.id}'...")
+                time.sleep(step.delay / 1000.0)
             if step.type == "wait":
+                print(
+                    f"  [wait] '{step.id}' ({step.name or 'no name'}) — {step.duration}ms"
+                )
                 time.sleep(step.duration / 1000.0)
+                print(f"  [wait] '{step.id}' finished")
                 done.add(step.id)
             else:
+                print(
+                    f"  [launch] '{step.id}' ({step.name or 'no name'}) → {step.target} — {step.duration}ms"
+                )
                 proc = _run_sidecar(step)
                 running[step.id] = proc
 
-        ready = []
-
         if not running:
-            break
+            # Only wait steps were launched; recompute frontier
+            continue
 
         # Poll running processes until at least one finishes
         while True:
@@ -118,31 +138,28 @@ def execute(path: str):
             del running[step_id]
             if retcode != 0:
                 print(
-                    f"Step '{step_id}' failed with exit code {retcode}.",
+                    f"  [fail] Step '{step_id}' failed with exit code {retcode}.",
                     file=sys.stderr,
                 )
                 failed = True
                 continue
 
+            print(f"  [done] Step '{step_id}' finished")
             done.add(step_id)
 
         if failed:
-            # Stop scheduling new steps; let running sidecars finish
-            continue
-
-        # Compute new ready frontier
-        for step in scenario.steps:
-            if (
-                step.id in done
-                or step.id in running
-                or step.id in [s.id for s in ready]
-            ):
-                continue
-            if all(dep in done for dep in step.after):
-                if step.delay > 0:
-                    time.sleep(step.delay / 1000.0)
-                ready.append(step)
+            # Let remaining running processes finish
+            while running:
+                for step_id, proc in list(running.items()):
+                    if proc.poll() is not None:
+                        print(f"  [done] Step '{step_id}' finished (drain)")
+                        del running[step_id]
+                if running:
+                    time.sleep(0.1)
+            break
 
     if failed:
-        print("Scenario completed with failures.", file=sys.stderr)
+        print("\nScenario completed with failures.", file=sys.stderr)
         sys.exit(1)
+
+    print("\nScenario completed successfully.")
