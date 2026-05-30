@@ -221,7 +221,7 @@ def main():
         if args.dry_run:
             scenario_executor.dry_run(args.file)
         else:
-            print(f"Would execute scenario: {args.file}")
+            scenario_executor.execute(args.file)
     else:
         parser = _build_direct_parser()
         args = parser.parse_args(args_list)

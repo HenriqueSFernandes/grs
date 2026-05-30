@@ -90,3 +90,21 @@ class TestRunSubcommand:
                 sidecar_runner.main()
 
         mock_dry_run.assert_called_once_with(f.name)
+
+    @patch("injector.sidecar_runner.scenario_executor.execute")
+    def test_run_executes_scenario(self, mock_execute):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("name: test\nsteps: []\n")
+            f.flush()
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "chaosctl",
+                    "run",
+                    f.name,
+                ],
+            ):
+                sidecar_runner.main()
+
+        mock_execute.assert_called_once_with(f.name)

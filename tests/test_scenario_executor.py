@@ -1,7 +1,9 @@
 """Tests for scenario dry-run timeline."""
 
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from injector import scenario_executor
 
@@ -83,3 +85,131 @@ steps:
             with patch("injector.scenario_executor.subprocess.run") as mock_run:
                 scenario_executor.dry_run(f.name)
             mock_run.assert_not_called()
+
+
+class TestSequentialExecution:
+    """Scenario scheduler runs steps in DAG order."""
+
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_sequential_steps_run_in_order(self, mock_run_sidecar):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 3000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 2000
+    after: [s1]
+    faults:
+      - latency: 200
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        assert mock_run_sidecar.call_count == 2
+        first_call = mock_run_sidecar.call_args_list[0]
+        second_call = mock_run_sidecar.call_args_list[1]
+        assert first_call.args[0].id == "s1"
+        assert second_call.args[0].id == "s2"
+
+    @patch("injector.scenario_executor.time.sleep")
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_step_with_delay_sleeps_before_launch(self, mock_run_sidecar, mock_sleep):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 1000
+    after: [s1]
+    delay: 500
+    faults:
+      - latency: 200
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        mock_sleep.assert_called_once_with(0.5)
+        assert mock_run_sidecar.call_count == 2
+
+    @patch("injector.scenario_executor.time.sleep")
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_wait_step_blocks_locally(self, mock_run_sidecar, mock_sleep):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_run_sidecar.return_value = mock_proc
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - loss: 10
+  - id: pause
+    type: wait
+    duration: 500
+    after: [s1]
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            scenario_executor.execute(f.name)
+
+        mock_sleep.assert_called_once_with(0.5)
+        # wait step does not launch a sidecar
+        assert mock_run_sidecar.call_count == 1
+
+    @patch("injector.scenario_executor._run_sidecar")
+    def test_failure_stops_scheduling(self, mock_run_sidecar):
+        mock_proc_ok = MagicMock()
+        mock_proc_ok.poll.return_value = 0
+        mock_proc_fail = MagicMock()
+        mock_proc_fail.poll.return_value = 1
+        mock_run_sidecar.side_effect = [mock_proc_fail, mock_proc_ok]
+        yaml = """
+steps:
+  - id: s1
+    type: fault
+    target: c1
+    duration: 1000
+    faults:
+      - loss: 10
+  - id: s2
+    type: fault
+    target: c2
+    duration: 1000
+    after: [s1]
+    faults:
+      - latency: 200
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml)
+            f.flush()
+            with pytest.raises(SystemExit) as exc_info:
+                scenario_executor.execute(f.name)
+            assert exc_info.value.code == 1
+
+        # Only s1 launched; s2 never started because s1 failed
+        assert mock_run_sidecar.call_count == 1
