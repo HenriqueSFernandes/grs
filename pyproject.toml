@@ -1,6 +1,6 @@
 [project]
 name = "network-chaos-tool"
-version = "0.3.0"
+version = "0.4.0"
 description = "Programmable chaos engineering tool for Docker-based network topologies"
 readme = "README.md"
 license = {text = "MIT"}
