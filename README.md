@@ -1,29 +1,20 @@
 # Network Chaos Tool
 
-A programmable chaos engineering tool that targets Docker-based network topologies. It injects network faults — latency, packet loss, and more — into running containers at runtime using `tc` (traffic control) via a privileged sidecar, without requiring any special capabilities inside the target containers themselves.
+A programmable chaos engineering tool that targets Docker-based network topologies. It injects network faults - latency, packet loss, and more - into running containers at runtime using `tc` (traffic control) via a privileged sidecar, without requiring any special capabilities inside t0he target containers themselves.
 
 ## Goal
 
-The end goal is a full-featured chaos engineering platform for Docker networks. It will allow users to define fault scenarios (e.g., "break OSPF adjacency," "add 200ms latency + 10% packet loss on an uplink") and run them on demand against containerized infrastructure. An observability stack will monitor and record how the network recovers.
+The goal is a full-featured0 chaos engineering platform for Docker networks. It allows users to define fault scenarios and run them on demand against containerized infrastructure, with live observability for how the network responds.
 
-## What Has Been Done So Far
+## Features
 
-### Phase 1: Core PoC
-
-A fully functional Proof of Concept that proves we can manipulate the Linux kernel network parameters of any Docker container to simulate disasters.
-
-- **One-shot privileged sidecar (`chaos-sidecar`)**: Enters the target container's network namespace using `nsenter` to run `tc` commands directly.
-- **Effect stacking**: Latency and packet loss can be combined into a single composite `tc` rule.
-- **Idempotent recovery**: `--action clear` removes all `tc` rules and restores normal network behavior.
+- **Privileged sidecar (`chaos-sidecar`)**: Enters the target container's network namespace using `nsenter` to run `tc` commands directly.
+- **Composite faults**: Latency and packet loss can be combined into a single `tc` rule.
+- **Auto-clear**: Optional duration-based cleanup via `--duration`.
+- **Scenario runner**: Run YAML-defined scenarios with `chaosctl run`.
+- **Live dashboard**: Web UI with live tc metrics and ping measurements via `chaosctl serve`.
 - **Zero victim requirements**: Target containers need **no extra capabilities**, no `iproute2`, and no pre-configuration.
-
-### Phase 2: Distribution
-
-The tool is now **pip-installable** and published to PyPI. The sidecar image is resolved automatically:
-
-1. Check local Docker cache for the pinned version.
-2. If missing, try pulling `rickysf/chaos-sidecar:<version>` from Docker Hub.
-3. If the registry is unreachable, fall back to building the sidecar from the bundled `Dockerfile`.
+- **Sidecar image resolution**: Uses local cache, then Docker Hub, then bundled `Dockerfile` fallback.
 
 ### Supported Faults
 
@@ -32,7 +23,7 @@ The tool is now **pip-installable** and published to PyPI. The sidecar image is 
 | `latency` | Add a fixed delay (ms) to all outgoing traffic. |
 | `loss` | Add a random packet loss (%) to all outgoing traffic. |
 | `clear` | Remove all `tc` rules and restore normal network behavior. |
-
+0
 ## Prerequisites
 
 - Docker Engine running locally.
@@ -53,42 +44,47 @@ uv pip install -e .
 
 ## Quick Start
 
-### 1. Build the victim test container
+### 1. Build a victim container
 
 ```bash
 docker build -t chaos-victim tests/victim
 docker run -d --name victim chaos-victim
 ```
 
-### 2. Verify baseline connectivity
-
-```bash
-docker exec victim ping -c 4 8.8.8.8
-```
-
-### 3. Inject chaos via `chaosctl`
+### 2. Inject chaos via `chaosctl`
 
 ```bash
 # Add 500ms latency
 chaosctl --target victim --action latency --value 500
 
-# Verify the effect
-docker exec victim ping -c 4 8.8.8.8
+# Stack 20% packet loss on top (composite mode)
+chaosctl --target victim --latency 500 --loss 20
 
-# Stack 20% packet loss on top
-chaosctl --target victim --action loss --value 20
-
-# Verify both effects
-docker exec victim ping -c 20 8.8.8.8
+# Auto-clear after 5 seconds
+chaosctl --target victim --action loss --value 20 --duration 5000
 
 # Recover
 chaosctl --target victim --action clear
-
-# Verify recovery
-docker exec victim ping -c 4 8.8.8.8
 ```
 
-### 4. Advanced options
+### 3. Start the live dashboard
+
+```bash
+chaosctl serve --port 8080
+```
+
+Open `http://localhost:8080`. The server auto-starts a `chaos-monitor` sidecar for live metrics.
+
+### 4. Run a scenario YAML
+
+```bash
+chaosctl run examples/full-test.yaml
+
+# Validate only
+chaosctl run examples/full-test.yaml --dry-run
+```
+
+### 5. Advanced options
 
 ```bash
 # Use a specific sidecar image version
@@ -96,7 +92,40 @@ chaosctl --target victim --action clear --sidecar-version 0.2.0
 
 # Force a local build from bundled source (offline mode)
 chaosctl --target victim --action clear --local-build
+
+# Manually start a persistent monitor sidecar
+chaosctl monitor --monitor-host-port 9090
 ```
+
+## CLI Reference
+
+### chaosctl (host-side wrapper)
+
+```bash
+# Inject faults
+chaosctl --target <container> --action latency --value <ms>
+chaosctl --target <container> --action loss --value <percent>
+chaosctl --target <container> --action clear
+
+# Composite faults
+chaosctl --target <container> --latency <ms> --loss <percent>
+
+# Auto-clear after N ms
+chaosctl --target <container> --action loss --value 20 --duration 5000
+
+# Serve dashboard
+chaosctl serve --host 0.0.0.0 --port 8080
+
+# Run scenario YAML
+chaosctl run path/to/scenario.yaml --dry-run
+
+# Start monitor sidecar (optional; dashboard auto-starts it)
+chaosctl monitor --monitor-host-port 9090
+```
+
+### chaos (sidecar-only)
+
+`chaos` runs inside the privileged sidecar container and is not meant to be invoked directly on the host.
 
 ## Project Structure
 
@@ -110,18 +139,21 @@ proj/
 ├── injector/                   # Core chaos logic
 │   ├── __init__.py             # Package metadata
 │   ├── __main__.py             # Entry point for `python -m injector`
-│   ├── cli.py                  # Runs inside sidecar (nsenter logic)
+│   ├── cli.py                  # Runs inside sidecar (nsenter + monitor)
 │   ├── docker_client.py        # Resolves container name -> PID
-│   ├── network_chaos.py        # tc command builder with stacking
-│   └── sidecar_runner.py       # Host wrapper (chaosctl entrypoint)
+│   ├── monitor.py              # Monitor FastAPI app (metrics + ping)
+│   ├── network_chaos.py         # tc command builder with stacking
+│   ├── scenario_executor.py    # YAML scenario runner
+│   ├── sidecar_runner.py       # Host wrapper (chaosctl entrypoint)
+│   ├── templates/              # Dashboard HTML templates
+│   └── web_server.py           # Dashboard FastAPI app
+├── examples/                   # Scenario YAML examples
 └── tests/
     └── victim/
         └── Dockerfile          # Minimal Alpine victim for testing
 ```
 
-## Next Steps (Phase 3)
+## Roadmap
 
-- Scenario definitions via YAML config files.
-- Timed chaos (auto-clear after N seconds).
 - Support for additional fault types: jitter, corruption, bandwidth throttling, network partitions.
-- Observability hooks (Prometheus metrics, Grafana dashboard).
+- Export metrics to external observability stacks (Prometheus/Grafana).
