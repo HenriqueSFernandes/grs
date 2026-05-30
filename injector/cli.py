@@ -2,9 +2,15 @@
 
 import argparse
 import sys
+import time
 
 from injector.docker_client import get_container_pid
-from injector.network_chaos import add_latency, add_loss, clear_rules
+from injector.network_chaos import (
+    add_composite_fault,
+    add_latency,
+    add_loss,
+    clear_rules,
+)
 
 
 def main():
@@ -20,7 +26,6 @@ def main():
     parser.add_argument(
         "--action",
         "-a",
-        required=True,
         choices=["latency", "loss", "clear"],
         help="Chaos action to apply.",
     )
@@ -30,10 +35,37 @@ def main():
         type=int,
         help="Value for the action (ms for latency, percent for loss). Not needed for 'clear'.",
     )
+    parser.add_argument(
+        "--latency",
+        type=int,
+        help="Latency in milliseconds (composite fault mode).",
+    )
+    parser.add_argument(
+        "--loss",
+        type=int,
+        help="Packet loss percentage (composite fault mode).",
+    )
+    parser.add_argument(
+        "--duration",
+        "-d",
+        type=int,
+        help="Duration in milliseconds before auto-clearing the fault.",
+    )
 
     args = parser.parse_args()
 
-    if args.action in ("latency", "loss") and args.value is None:
+    has_composite = args.latency is not None or args.loss is not None
+    has_legacy = args.action is not None
+
+    if has_legacy and has_composite:
+        parser.error("Cannot mix --action/--value with --latency/--loss.")
+
+    if not has_legacy and not has_composite:
+        parser.error(
+            "Must specify either --action or composite flags (--latency, --loss)."
+        )
+
+    if has_legacy and args.action in ("latency", "loss") and args.value is None:
         parser.error(f"--value is required when action is '{args.action}'.")
 
     try:
@@ -43,7 +75,15 @@ def main():
         sys.exit(1)
 
     try:
-        if args.action == "latency":
+        if has_composite:
+            faults = {}
+            if args.latency is not None:
+                faults["latency"] = args.latency
+            if args.loss is not None:
+                faults["loss"] = args.loss
+            add_composite_fault(pid, faults)
+            print(f"Added composite fault to container '{args.target}': {faults}.")
+        elif args.action == "latency":
             add_latency(pid, args.value)
             print(f"Added {args.value}ms latency to container '{args.target}'.")
         elif args.action == "loss":
@@ -52,9 +92,25 @@ def main():
         elif args.action == "clear":
             clear_rules(pid)
             print(f"Cleared all tc rules from container '{args.target}'.")
-    except RuntimeError as exc:
+    except (ValueError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    if args.duration is not None and (
+        has_composite or args.action in ("latency", "loss")
+    ):
+        if args.duration < 0:
+            print("Error: --duration must be non-negative.", file=sys.stderr)
+            sys.exit(1)
+        time.sleep(args.duration / 1000.0)
+        try:
+            clear_rules(pid)
+            print(
+                f"Auto-cleared rules from container '{args.target}' after {args.duration}ms."
+            )
+        except RuntimeError as exc:
+            print(f"Error during auto-clear: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

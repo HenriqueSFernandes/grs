@@ -79,6 +79,33 @@ def _build_netem_command(action: str, params: dict) -> str:
     return " ".join(parts)
 
 
+def add_composite_fault(pid: int, faults: dict):
+    """Apply multiple netem faults to eth0 in a single tc invocation.
+
+    Args:
+        pid: Host PID of the target container's init process.
+        faults: Dict mapping fault names to values, e.g.
+                {"latency": 500, "loss": 20}.
+    """
+    params = {}
+    if "latency" in faults:
+        latency = int(faults["latency"])
+        if latency < 0:
+            raise ValueError("Latency must be non-negative.")
+        params["delay"] = latency
+    if "loss" in faults:
+        loss = float(faults["loss"])
+        if not 0 <= loss <= 100:
+            raise ValueError("Loss percent must be between 0 and 100.")
+        params["loss"] = loss
+
+    action = "change" if _has_netem_qdisc(pid) else "add"
+    cmd = _build_netem_command(action, params)
+    result = _exec_tc_in_netns(pid, cmd)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to add composite fault: {result.stderr.strip()}")
+
+
 def clear_rules(pid: int):
     """Remove all tc rules on eth0 inside the container's network namespace.
 

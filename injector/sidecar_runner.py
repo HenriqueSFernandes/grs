@@ -1,7 +1,6 @@
 """Host-side wrapper that launches the chaos-sidecar container."""
 
 import argparse
-import importlib.resources
 import shutil
 import subprocess
 import sys
@@ -9,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 import injector
-
+from injector import scenario_executor
 
 SIDECAR_IMAGE = "rickysf/chaos-sidecar"
 SIDECAR_VERSION = injector.__version__
@@ -106,7 +105,11 @@ def _build_image(tag: str):
             if item.is_file():
                 shutil.copy2(item, injector_dst / item.name)
             elif item.is_dir():
-                shutil.copytree(item, injector_dst / item.name, ignore=shutil.ignore_patterns("__pycache__"))
+                shutil.copytree(
+                    item,
+                    injector_dst / item.name,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
 
         subprocess.run(
             ["docker", "build", "-t", tag, str(tmp)],
@@ -117,40 +120,73 @@ def _build_image(tag: str):
 def _run_sidecar(tag: str, args: argparse.Namespace):
     """Launch the sidecar container with the requested chaos args."""
     cmd = [
-        "docker", "run", "--rm",
+        "docker",
+        "run",
+        "--rm",
         "--privileged",
         "--pid=host",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
         tag,
-        "--target", args.target,
-        "--action", args.action,
+        "--target",
+        args.target,
     ]
+
+    if args.action is not None:
+        cmd.extend(["--action", args.action])
 
     if args.value is not None:
         cmd.extend(["--value", str(args.value)])
 
+    if args.duration is not None:
+        cmd.extend(["--duration", str(args.duration)])
+
+    if getattr(args, "latency", None) is not None:
+        cmd.extend(["--latency", str(args.latency)])
+
+    if getattr(args, "loss", None) is not None:
+        cmd.extend(["--loss", str(args.loss)])
+
     subprocess.run(cmd, check=True)
 
 
-def main():
+def _build_direct_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inject network chaos into a Docker container (host-side wrapper)."
     )
     parser.add_argument(
-        "--target", "-t",
+        "--target",
+        "-t",
         required=True,
         help="Name or ID of the target container.",
     )
     parser.add_argument(
-        "--action", "-a",
-        required=True,
+        "--action",
+        "-a",
         choices=["latency", "loss", "clear"],
         help="Chaos action to apply.",
     )
     parser.add_argument(
-        "--value", "-v",
+        "--value",
+        "-v",
         type=int,
         help="Value for the action (ms for latency, percent for loss). Not needed for 'clear'.",
+    )
+    parser.add_argument(
+        "--latency",
+        type=int,
+        help="Latency in milliseconds (composite fault mode).",
+    )
+    parser.add_argument(
+        "--loss",
+        type=int,
+        help="Packet loss percentage (composite fault mode).",
+    )
+    parser.add_argument(
+        "--duration",
+        "-d",
+        type=int,
+        help="Duration in milliseconds before the sidecar auto-clears the fault.",
     )
     parser.add_argument(
         "--sidecar-version",
@@ -161,23 +197,69 @@ def main():
         action="store_true",
         help="Force a local build of the sidecar image from bundled source.",
     )
+    return parser
 
-    args = parser.parse_args()
 
-    if args.action in ("latency", "loss") and args.value is None:
-        parser.error(f"--value is required when action is '{args.action}'.")
+def _build_run_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run a chaos scenario from a YAML file."
+    )
+    parser.add_argument("file", help="Path to the scenario YAML file.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and print a timeline without applying chaos.",
+    )
+    return parser
 
-    try:
-        tag = _ensure_image(args)
-        _run_sidecar(tag, args)
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"Error: Command failed with exit code {exc.returncode}.", file=sys.stderr
-        )
-        sys.exit(1)
-    except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+
+def main():
+    args_list = sys.argv[1:]
+
+    if args_list and args_list[0] == "run":
+        parser = _build_run_parser()
+        args = parser.parse_args(args_list[1:])
+        try:
+            if args.dry_run:
+                scenario_executor.dry_run(args.file)
+            else:
+                scenario_executor.execute(args.file)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        parser = _build_direct_parser()
+        args = parser.parse_args(args_list)
+
+        has_composite = args.latency is not None or args.loss is not None
+        has_legacy = args.action is not None
+
+        if has_legacy and has_composite:
+            parser.error("Cannot mix --action/--value with --latency/--loss.")
+
+        if not has_legacy and not has_composite:
+            parser.error(
+                "Must specify either --action or composite flags (--latency, --loss)."
+            )
+
+        if has_legacy and args.action in ("latency", "loss") and args.value is None:
+            parser.error(f"--value is required when action is '{args.action}'.")
+
+        try:
+            tag = _ensure_image(args)
+            _run_sidecar(tag, args)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"Error: Command failed with exit code {exc.returncode}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
